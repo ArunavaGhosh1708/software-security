@@ -1,0 +1,144 @@
+# Original Sentinel rules. SPDX-License-Identifier: MIT
+rules:
+  - id: sentinel.express-command-taint
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: HTTP request input reaches a shell command; use a fixed executable and validated argument array.
+    mode: taint
+    pattern-sources:
+      - pattern: $REQ.query.$PARAM
+      - pattern: $REQ.body.$PARAM
+      - pattern: $REQ.params.$PARAM
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $CP.exec($COMMAND, ...)
+              - pattern: $CP.execSync($COMMAND, ...)
+          - focus-metavariable: $COMMAND
+    metadata:
+      cwe: [CWE-78]
+      remediation: Use execFile or spawn with a fixed executable, separate arguments, shell disabled, and allowlisted input.
+  - id: sentinel.flask-command-taint
+    languages: [python]
+    severity: ERROR
+    message: HTTP request input reaches shell execution.
+    mode: taint
+    pattern-sources:
+      - pattern: request.args.get(...)
+      - pattern: request.form.get(...)
+      - pattern: request.GET.get(...)
+    pattern-sinks:
+      - pattern: os.system(...)
+      - pattern: subprocess.run(..., shell=True, ...)
+      - pattern: subprocess.Popen(..., shell=True, ...)
+    metadata:
+      cwe: [CWE-78]
+      remediation: Use a fixed executable with a validated argument list and shell=False.
+  - id: sentinel.python-tls-disabled
+    languages: [python]
+    severity: ERROR
+    message: HTTP certificate validation is explicitly disabled.
+    pattern-either:
+      - pattern: requests.get(..., verify=False, ...)
+      - pattern: requests.post(..., verify=False, ...)
+      - pattern: requests.request(..., verify=False, ...)
+    metadata:
+      cwe: [CWE-295]
+      remediation: Enable certificate verification and install the correct trusted CA bundle.
+  - id: sentinel.node-tls-disabled
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: TLS certificate validation is explicitly disabled.
+    pattern-either:
+      - pattern: 'new https.Agent({..., rejectUnauthorized: false, ...})'
+      - pattern: process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0"
+    metadata:
+      cwe: [CWE-295]
+      remediation: Remove the TLS bypass and configure trusted certificate authorities for development and deployment.
+  - id: sentinel.flask-debug
+    languages: [python]
+    severity: WARNING
+    message: An explicitly enabled Flask debugger requires deployment review.
+    pattern: $APP.run(..., debug=True, ...)
+    metadata:
+      cwe: [CWE-489]
+      remediation: Disable the interactive debugger for shared or deployed applications and use a production WSGI server.
+  - id: sentinel.express-sql-taint
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: Request input reaches SQL query text; verify parameterization and input provenance.
+    mode: taint
+    pattern-sources:
+      - pattern: $REQ.query.$PARAM
+      - pattern: $REQ.body.$PARAM
+      - pattern: $REQ.params.$PARAM
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $DB.query($SQL, ...)
+              - pattern: $DB.execute($SQL, ...)
+          - focus-metavariable: $SQL
+    metadata:
+      cwe: [CWE-89]
+      remediation: Use a constant SQL statement with bound parameters. Verify database-driver placeholder syntax.
+  - id: sentinel.flask-django-sql-taint
+    languages: [python]
+    severity: ERROR
+    message: Flask/Django request data reaches SQL query text; verify parameterization.
+    mode: taint
+    pattern-sources:
+      - pattern: request.args.get(...)
+      - pattern: request.GET.get(...)
+      - pattern: request.POST.get(...)
+      - pattern: request.get_json(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $DB.execute($SQL, ...)
+              - pattern: $DB.executemany($SQL, ...)
+          - focus-metavariable: $SQL
+    metadata:
+      cwe: [CWE-89]
+      remediation: Keep SQL text constant and supply values separately as database-driver parameters.
+  - id: sentinel.python-pickle
+    languages: [python]
+    severity: ERROR
+    message: Native pickle deserialization requires a trusted input boundary.
+    pattern-either:
+      - pattern: pickle.loads(...)
+      - pattern: pickle.load(...)
+    metadata:
+      cwe: [CWE-502]
+      remediation: Replace untrusted pickle input with a schema-validated data-only format.
+  - id: sentinel.javascript-eval
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: Dynamic evaluation can execute attacker-controlled code.
+    pattern: eval(...)
+    metadata:
+      cwe: [CWE-95]
+      remediation: Parse data explicitly and use allowlisted operations.
+  - id: sentinel.java-object-input
+    languages: [java]
+    severity: ERROR
+    message: ObjectInputStream needs a trusted and constrained input boundary.
+    pattern: new ObjectInputStream(...)
+    metadata:
+      cwe: [CWE-502]
+      remediation: Prefer validated data-only formats over native deserialization.
+  - id: sentinel.csharp-binaryformatter
+    languages: [csharp]
+    severity: ERROR
+    message: BinaryFormatter is unsafe at untrusted deserialization boundaries.
+    pattern: new BinaryFormatter(...)
+    metadata:
+      cwe: [CWE-502]
+      remediation: Replace BinaryFormatter with a supported data-only serializer.
+  - id: sentinel.go-insecure-tls
+    languages: [go]
+    severity: ERROR
+    message: TLS certificate verification is disabled.
+    pattern: 'tls.Config{..., InsecureSkipVerify: true, ...}'
+    metadata:
+      cwe: [CWE-295]
+      remediation: Restore certificate verification and configure trusted RootCAs.

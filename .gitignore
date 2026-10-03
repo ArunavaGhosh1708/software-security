@@ -1,0 +1,16 @@
+node_modules/
+.next/
+.env*
+!.env.example
+.data/
+.pytest_cache/
+pytest-cache-files-*/
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.tsbuildinfo
+runner-registration.json
+runner-settings.json
+*.dump
+artifacts/

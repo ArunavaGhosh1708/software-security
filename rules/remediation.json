@@ -1,0 +1,43 @@
+{
+  "secrets": {
+    "generic-api-key": {
+      "summary": "Identify the service and permissions behind this possible API credential before choosing a replacement.",
+      "steps": ["Confirm with the application owner whether this is a real server credential, a public client identifier, or a test placeholder. The generic pattern does not identify its provider.", "If it grants access, revoke or rotate it in the issuing service, update the application's secret configuration, and review available usage logs.", "Replace the literal with runtime secret configuration. Keep browser-visible code limited to intentionally public identifiers; privileged keys must stay on the server."],
+      "verification": "Check the issuer's credential status and test the application with the replacement. Rescan current files and available Git history. A clean source scan cannot prove that the old credential was revoked."
+    },
+    "private-key": {
+      "summary": "Replace the exposed private key and update the systems that trust its public counterpart.",
+      "steps": ["Identify whether the key is used for SSH, TLS, signing, or a test fixture. A private-key block does not establish its purpose or whether it is still trusted.", "For a real key, generate a replacement through the owning system's key-management process. Update the corresponding trust configuration and retire the old key or certificate as appropriate to its purpose.", "Store private key material in a protected secret file or key-management service, outside version control. Replace test fixtures with clearly non-production material when appropriate."],
+      "verification": "Verify that the replacement works and the old key is no longer trusted by the affected system. Rescan current files and available history; absence from source alone does not establish retirement."
+    },
+    "aws-access-token": {
+      "summary": "Replace the AWS access credential and remove the embedded credential from the application.",
+      "steps": ["Identify the owning AWS principal and confirm whether the reported access key is active.", "If active, replace it through the owner-approved AWS credential process, update consumers, and disable the exposed key. Review available AWS access activity.", "Prefer role-based temporary credentials where the deployment supports them; otherwise inject the replacement through protected server-side configuration."],
+      "verification": "Verify the old key is disabled and the application works with its replacement or role. Rescan the affected files and available history."
+    },
+    "github-pat": {
+      "summary": "Replace the exposed GitHub personal access token and update its consumers.",
+      "steps": ["Identify the token owner and applications or CI jobs using it.", "Revoke the exposed token in GitHub, issue a replacement with only the required repository access and permissions, and review available access activity.", "Store the replacement in a protected CI or server secret; remove the literal from source and templates."],
+      "verification": "Confirm revocation in the owner's token settings and test the affected integration with the replacement. Rescan current files and available history."
+    },
+    "default": {
+      "summary": "Identify and retire this possible exposed credential through its issuing system.",
+      "steps": ["Confirm the owner, issuing service, and whether the detected value is a real credential or a documented non-secret fixture.", "If real, revoke or rotate it through the issuing system, update consumers, and review available usage logs.", "Replace the source literal with protected runtime configuration and a non-secret example placeholder."],
+      "verification": "Confirm the old credential is retired at its issuer, test the updated application, and rescan current source and available history."
+    }
+  },
+  "lint": {
+    "F401": "Remove the unused import. If it intentionally re-exports a public API, make that export explicit rather than deleting required behavior.",
+    "F841": "Remove the unused local assignment if its value is unnecessary. Preserve any required side effects, or use the value where intended.",
+    "no-eval": "Replace eval with data parsing or an explicit allowlisted operation; do not evaluate user input as JavaScript.",
+    "no-implied-eval": "Pass a function to the timer or callback API instead of a string containing code.",
+    "no-new-func": "Replace dynamically constructed functions with declared functions and explicit operations.",
+    "no-debugger": "Remove the debugger statement from application code.",
+    "no-unreachable": "Remove the unreachable statement or move the required operation before the return, throw, break, or continue that prevents it running.",
+    "no-constant-condition": "Replace the unintended constant condition with the intended expression. For an intentional loop, document the termination behavior and review the rule configuration.",
+    "AvoidStarImportCheck": "Replace the wildcard import with explicit imports for the types used in this file.",
+    "EmptyCatchBlockCheck": "Handle the caught exception, propagate it, or document the intentional recovery behavior; do not silently discard a meaningful failure.",
+    "EqualsHashCodeCheck": "Implement compatible equals and hashCode methods together and verify equal instances produce equal hash codes.",
+    "FallThroughCheck": "Terminate the switch branch with the appropriate break or return, or explicitly document intentional fall-through."
+  }
+}

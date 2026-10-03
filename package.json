@@ -1,0 +1,37 @@
+{
+  "name": "sentinel-guardrails",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev --hostname 127.0.0.1",
+    "build": "next build",
+    "start": "next start --hostname 127.0.0.1",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test tests/*.test.ts",
+    "setup": "python scripts/setup.py",
+    "migrate": "tsx scripts/migrate.ts",
+    "cleanup": "tsx scripts/cleanup.ts",
+    "test:runner": "python -m pytest runner/tests -q"
+  },
+  "dependencies": {
+    "@electric-sql/pglite": "0.3.14",
+    "@supabase/supabase-js": "2.117.2",
+    "jose": "6.1.3",
+    "lucide-react": "0.468.0",
+    "next": "16.3.8",
+    "pg": "8.16.3",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
+    "yaml": "2.9.1",
+    "zod": "4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "22.15.30",
+    "@types/pg": "8.15.5",
+    "@types/react": "19.2.2",
+    "@types/react-dom": "19.2.2",
+    "tsx": "4.20.6",
+    "typescript": "5.9.3"
+  }
+}

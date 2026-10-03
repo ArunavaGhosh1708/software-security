@@ -1,0 +1,15 @@
+version: 1
+mode: advisory
+checks: [guardrails, quality, opengrep, gitleaks, trivy, lint]
+exclusions: [node_modules/**, .git/**, .next/**, .data/**, artifacts/**, fixtures/**]
+gate:
+  severities: [critical, high]
+  new_only: true
+  rules: []
+architecture: []
+unsafe_apis: []
+compiler_analysis: false
+monitoring:
+  window_seconds: 300
+  auth_failure_threshold: 10
+  denied_threshold: 30
