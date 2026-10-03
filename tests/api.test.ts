@@ -7,6 +7,37 @@ import {db,closeDatabase} from '../lib/db';
 process.env.DATABASE_MODE='embedded';process.env.TEST_DATABASE='true';process.env.LOCAL_AUTH='true';process.env.SESSION_SECRET='test-only-secret-with-at-least-32-characters';process.env.APP_ORIGIN='http://127.0.0.1:3000';
 after(closeDatabase);
 
+test('AI suggestions default to Gemini and redact request and response credentials',async(t)=>{
+  const previous={key:process.env.AI_API_KEY,model:process.env.AI_MODEL,url:process.env.AI_BASE_URL};
+  process.env.AI_API_KEY='test-only-provider-key';process.env.AI_MODEL='gemini-3.8-flash';delete process.env.AI_BASE_URL;
+  try {
+    const owner=randomUUID(),org=(await call('overview','GET',owner)).data.session.org;
+    const project=(await call('projects','POST',owner,{name:'Gemini test',source_type:'local',source_ref:'gemini-test'})).data;
+    await call(`projects/${project.id}`,'PATCH',owner,{ai_enabled:true,metadata_only:false});
+    const finding=randomUUID();
+    await db.query(`INSERT INTO findings(id,organization_id,project_id,fingerprint,rule,engine,severity,category,title,data,revision)
+      VALUES($1,$2,$3,$4,'test','guardrails','high','security','Test',$5,'test')`,[finding,org,project.id,'g'.repeat(64),JSON.stringify({evidence:'api_key="private-fixture-value"'})]);
+    let requests=0;
+    t.mock.method(globalThis,'fetch',async(input:string|URL|Request,options?:RequestInit)=>{
+      requests++;
+      assert.equal(String(input),'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions');
+      assert.equal(new Headers(options?.headers).get('authorization'),'Bearer test-only-provider-key');
+      assert.equal(options?.redirect,'error');
+      const payload=JSON.parse(String(options?.body));
+      assert.equal(payload.model,'gemini-3.8-flash');assert.equal(payload.max_completion_tokens,2000);
+      assert(!JSON.stringify(payload).includes('private-fixture-value'));assert(!('tools' in payload));
+      return Response.json({choices:[{message:{content:'Review suggestion api_key="response-fixture-value"'}}]});
+    });
+    const response=await call(`findings/${finding}/ai`,'POST',owner,{});
+    assert.equal(response.status,200);assert.equal(requests,1);
+    assert.equal(response.data.validation,'unvalidated');assert(!response.data.text.includes('response-fixture-value'));
+  } finally {
+    for(const [name,value] of Object.entries({AI_API_KEY:previous.key,AI_MODEL:previous.model,AI_BASE_URL:previous.url})) {
+      if(value===undefined)delete process.env[name];else process.env[name]=value;
+    }
+  }
+});
+
 async function call(path:string,method:string,user:string|undefined,data?:unknown,extra:Record<string,string>={}) {
   const headers={'Content-Type':'application/json',Origin:'http://127.0.0.1:3000',...extra} as Record<string,string>;
   if(user)headers.cookie=`sentinel-session=${await signSession(user)}`;

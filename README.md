@@ -121,7 +121,17 @@ GitHub scan credentials are short-lived and passed only to the assigned runner. 
 
 Until branch-specific baselines are implemented, explicit GitHub revision/PR scans conservatively evaluate all reported findings for enforced gates and cannot resolve project-wide baseline findings. This can block existing issues; it prevents a different branch from silently passing or closing the default branch's issues.
 
-Cloud AI is disabled by default. Configure `AI_API_KEY`, `AI_MODEL`, and optionally an HTTPS OpenAI-compatible `AI_BASE_URL`, then enable AI on the individual project. Only redacted finding context is supplied. The model receives no tools or execution access. Output is a reviewable, unvalidated suggestion and can be downloaded. Curated explanations and supported fix templates work without AI. Cloud provider charges and data handling are separate from this project's free core.
+Cloud AI is disabled until an API key is configured and AI is enabled on the individual project. Gemini is the default provider, using Google's [OpenAI-compatible Gemini endpoint](https://ai.google.dev/gemini-api/docs/openai). Create a Gemini API key in [Google AI Studio](https://aistudio.google.com/api-keys), then set these server-only variables in `.env.local` (or your hosting environment):
+
+```dotenv
+AI_API_KEY=your-gemini-api-key
+AI_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai
+AI_MODEL=gemini-3.8-flash
+```
+
+Restart the application after changing these values, then enable AI and snippet retention in the individual project's settings. Keep the key out of Git and do not prefix it with `NEXT_PUBLIC_`. You can select another compatible Gemini model using `AI_MODEL`; other providers remain supported by setting their HTTPS OpenAI-compatible `AI_BASE_URL` and corresponding key/model.
+
+Only redacted finding context is supplied to the configured provider (Google for the default configuration). The model receives no tools or execution access. Output is a reviewable, unvalidated suggestion and can be downloaded. Curated explanations and supported fix templates work without AI. Cloud provider charges and data handling are separate from this project's free core.
 
 ## Supabase / Docker profile
 

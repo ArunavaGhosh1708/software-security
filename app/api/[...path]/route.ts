@@ -137,7 +137,7 @@ async function route(request:Request, context:{params:Promise<{path:string[]}>})
         canWrite(s);const p=await projectFor(s.org,f.project_id);
         check(p.ai_enabled&&!p.metadata_only,403,'Enable AI and snippet retention in project settings first.');
         check(process.env.AI_API_KEY&&process.env.AI_MODEL,503,'Configure AI_API_KEY and AI_MODEL; cloud usage can incur charges.');
-        const provider=new URL(process.env.AI_BASE_URL??'https://api.openai.com/v1');
+        const provider=new URL(process.env.AI_BASE_URL??'https://generativelanguage.googleapis.com/v1beta/openai');
         check(provider.protocol==='https:'&&!provider.username&&!provider.password&&!provider.search&&!provider.hash,503,'AI provider must use an HTTPS base URL without credentials, query, or fragment.');
         await rateLimit(`ai:${s.org}`,10,3600);
         const response=await fetch(`${provider.href.replace(/\/$/,'')}/chat/completions`,{method:'POST',redirect:'error',headers:{authorization:`Bearer ${process.env.AI_API_KEY}`,'Content-Type':'application/json'},
