@@ -103,12 +103,24 @@ CREATE TABLE IF NOT EXISTS threat_intelligence (
 );
 INSERT INTO schema_versions(version) VALUES (2) ON CONFLICT DO NOTHING;
 
+CREATE TABLE IF NOT EXISTS github_installations (
+  organization_id uuid NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  installation_id bigint NOT NULL, account_login text NOT NULL, connected_by uuid NOT NULL,
+  repositories jsonb NOT NULL DEFAULT '[]', connected_at timestamptz NOT NULL DEFAULT now(), revoked_at timestamptz,
+  PRIMARY KEY(organization_id,installation_id)
+);
+CREATE TABLE IF NOT EXISTS github_connect_states (
+  state_hash text PRIMARY KEY, organization_id uuid NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  user_id uuid NOT NULL, installation_id bigint, code_verifier text, expires_at timestamptz NOT NULL
+);
+INSERT INTO schema_versions(version) VALUES (3) ON CONFLICT DO NOTHING;
+
 -- The app uses a privileged server connection and explicit tenant predicates. Direct
 -- Supabase clients have no table access; all access is mediated by authenticated APIs.
 DO $$ DECLARE t text; BEGIN
   FOREACH t IN ARRAY ARRAY['organizations','memberships','projects','runners','scans','executions','findings',
     'scan_findings','suppressions','runtime_events','alerts','audit_events','github_deliveries','rate_limits',
-    'finding_notes','saved_views','threat_intelligence'] LOOP
+    'finding_notes','saved_views','threat_intelligence','github_installations','github_connect_states'] LOOP
     EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);
     IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname='anon') THEN
       EXECUTE format('REVOKE ALL ON %I FROM anon', t);

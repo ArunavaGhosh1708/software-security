@@ -58,11 +58,12 @@ test('report schema rejects malformed and oversized findings',()=>{
 
 test('GitHub organization binding, signed webhook, and atomic duplicate delivery',async()=>{
   const org=randomUUID(),project=randomUUID();
-  process.env.GITHUB_ORGANIZATION_INSTALLATIONS=JSON.stringify({[org]:[12345]});
   process.env.GITHUB_WEBHOOK_SECRET='test-webhook-secret';
-  installationAllowed(org,12345);
-  assert.throws(()=>installationAllowed(randomUUID(),12345));
   await db.query('INSERT INTO organizations(id,name) VALUES($1,$2)',[org,'GitHub fixture']);
+  await db.query('INSERT INTO github_installations(organization_id,installation_id,account_login,connected_by,repositories) VALUES($1,12345,$2,$3,$4)',[org,'fixture',randomUUID(),JSON.stringify([{id:1,full_name:'fixture/project'}])]);
+  await installationAllowed(org,12345,'fixture/project');
+  await assert.rejects(()=>installationAllowed(randomUUID(),12345));
+  await assert.rejects(()=>installationAllowed(org,12345,'fixture/other'));
   await db.query('INSERT INTO projects(id,organization_id,name,source_type,source_ref,github_installation_id,policy) VALUES($1,$2,$3,$4,$5,$6,$7)',[project,org,'Webhook fixture','github','fixture/project',12345,JSON.stringify(DEFAULT_POLICY)]);
   const payload=JSON.stringify({action:'synchronize',installation:{id:12345},repository:{full_name:'fixture/project'},pull_request:{head:{repo:{full_name:'fixture/project'},sha:'a'.repeat(40)}}});
   const headers={'x-github-delivery':randomUUID(),'x-github-event':'pull_request','x-hub-signature-256':'sha256='+createHmac('sha256',process.env.GITHUB_WEBHOOK_SECRET).update(payload).digest('hex')};

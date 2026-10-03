@@ -40,7 +40,7 @@ async function route(request:Request, context:{params:Promise<{path:string[]}>})
         await cleanup();
         const job=await claim(runner);
         if(job?.source_type==='github') {
-          try {installationAllowed(runner.organization_id,Number(job.github_installation_id));job.github_token=await installationToken(Number(job.github_installation_id),job.source_ref);}
+          try {await installationAllowed(runner.organization_id,Number(job.github_installation_id),job.source_ref);job.github_token=await installationToken(Number(job.github_installation_id),job.source_ref);}
           catch {await finish(runner,job.id,job.lease_token,null,'GitHub installation authentication failed.');throw new HttpError(502,'GitHub installation authentication failed.');}
         }
         return ok({job});

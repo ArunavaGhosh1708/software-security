@@ -7,6 +7,7 @@ import {addNote,assignFindings,contextSchema,filterSchema,listFindings,summary} 
 import {compareReports,sarif} from './exports';
 import {projectFor} from './scans';
 import {refreshIntelligence,INTELLIGENCE_SOURCES} from './intelligence';
+import {startGithubConnect,completeGithubConnect,githubConnectConfigured,githubConnections,githubRepositories} from './github-connect';
 
 const uuid=z.string().uuid();
 const json=(data:unknown,status=200)=>Response.json(data,{status,headers:{'Cache-Control':'no-store'}});
@@ -16,6 +17,9 @@ async function report(org:string,id:string):Promise<Record<string,any>&{findings
 }
 export async function workbenchApi(request:Request,path:string[],s:Session):Promise<Response|null> {
   const key=path.join('/'),method=request.method,url=new URL(request.url);
+  if(key==='github/connect'&&method==='POST'){canOwn(s);await rateLimit(`github-connect:${s.user}`,10,900);return json(await startGithubConnect(s));}
+  if(key==='github/connect/complete'&&method==='POST')return json(await completeGithubConnect(s,await body(request,4000)));
+  if(key==='github/repositories'&&method==='GET')return json(await githubRepositories(s));
   if(key==='findings'&&method==='GET')return json(await listFindings(s.org,Object.fromEntries(url.searchParams)));
   if(key==='findings/summary'&&method==='GET')return json(await summary(s.org,url.searchParams.has('project')?uuid.parse(url.searchParams.get('project')):undefined));
   if(key==='findings/assign'&&method==='POST'){canWrite(s);return json(await assignFindings(s,await body(request,20000)));}
@@ -56,7 +60,7 @@ export async function workbenchApi(request:Request,path:string[],s:Session):Prom
       (SELECT count(*)::integer FROM scans WHERE organization_id=$1 AND status='running' AND lease_until<now()) AS expired_leases,
       (SELECT max(kev_checked_at) FROM threat_intelligence WHERE organization_id=$1) AS kev_checked_at,
       (SELECT max(epss_checked_at) FROM threat_intelligence WHERE organization_id=$1) AS epss_checked_at`,[s.org]);
-    return json({...stats[0],github_configured:!!(process.env.GITHUB_APP_ID&&process.env.GITHUB_APP_PRIVATE_KEY&&process.env.GITHUB_WEBHOOK_SECRET),ai_configured:!!(process.env.AI_API_KEY&&process.env.AI_MODEL),sources:INTELLIGENCE_SOURCES});
+    return json({...stats[0],github_configured:githubConnectConfigured(),github_connections:await githubConnections(s.org),ai_configured:!!(process.env.AI_API_KEY&&process.env.AI_MODEL),sources:INTELLIGENCE_SOURCES});
   }
   return null;
 }

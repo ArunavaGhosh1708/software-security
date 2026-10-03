@@ -17,6 +17,9 @@ Use a Supabase user access token as `Authorization: Bearer …` for application 
 | `GET /api/scans/{id}/sbom` | Trivy-produced CycloneDX document; 404 when unavailable | Viewer or above |
 | `GET /api/scans/{id}/compare?base={scanId}` | Compare two completed scans of the same project | Viewer or above |
 | `GET /api/integrations` | Organization runner/service status | Viewer or above |
+| `POST /api/github/connect` | Start GitHub installation and authorization | Owner |
+| `POST /api/github/connect/complete` | Verify a user/workspace-bound callback | Owner |
+| `GET /api/github/repositories` | Currently granted repositories authorized for this workspace | Owner |
 | `POST /api/intelligence/refresh` | On-demand public CVE enrichment | Owner |
 
 Finding query parameters: `project` (UUID), `q` (text), `severity`, `status` (`actionable`, `all`, or a triage status), `category`, `engine`, `assignee` (label or `unassigned`), `overdue` (`all`/`yes`), `sort` (`priority`/`newest`/`oldest`/`due`), `page` (starts at 1), `limit` (1–100; default 25). Invalid parameters are rejected. Response: `items`, `total`, `page`, `limit`, `pages`. Ordering is deterministic with a finding-ID tie-breaker; offset pages are live views, not an immutable export snapshot.
