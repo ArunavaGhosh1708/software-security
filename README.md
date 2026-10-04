@@ -150,7 +150,7 @@ Run `npm run migrate` to apply the idempotent schema. Authentication identities 
 
 ## Vercel preview
 
-The app includes `vercel.json`. Set `DATABASE_MODE=postgres`, a server-only Supabase PostgreSQL `DATABASE_URL` (session-mode connection/pooler), `LOCAL_AUTH=false`, a strong `SESSION_SECRET`, HTTPS `APP_ORIGIN`, and matching public/server Supabase URL and anon keys. Configure Next.js public variables **at build time**. Deploy the dashboard only; scan execution remains on private runners. Embedded PostgreSQL and local login refuse Vercel deployment.
+The app includes `vercel.json`. Set `DATABASE_MODE=postgres`, a server-only Supabase PostgreSQL `DATABASE_URL` (transaction-mode pooler for serverless deployment), `LOCAL_AUTH=false`, a strong `SESSION_SECRET`, HTTPS `APP_ORIGIN`, and matching public/server Supabase URL and anon keys. The database also accepts the Supabase/Vercel integration's `POSTGRES_URL` directly; a nonempty `DATABASE_URL` takes precedence, so duplicating the credential is unnecessary. Transaction-mode pooling is supported: schema initialization uses a transaction-scoped advisory lock. If your database requires a custom CA, set server-only `DATABASE_SSL_CA` to the PEM certificate downloaded from Supabase Database Settings. Certificate validation stays enabled. Configure Next.js public variables **at build time**. Deploy the dashboard only; scan execution remains on private runners. Embedded PostgreSQL and local login refuse Vercel deployment.
 
 No public deployment is made by setup. Vercel Hobby currently limits use to non-commercial personal projects; commercial hosting and paid-worker decisions are intentionally deferred. The complete local core has no service subscription requirement.
 

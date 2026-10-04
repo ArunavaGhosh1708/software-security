@@ -1,6 +1,7 @@
 import type { NextConfig } from 'next';
 const config: NextConfig = {
   serverExternalPackages: ['pg', '@electric-sql/pglite'],
+  outputFileTracingIncludes: {'/*': ['./db/schema.sql']},
   async headers() {
     return [{source: '/:path*', headers: [
       {key: 'X-Content-Type-Options', value: 'nosniff'},
