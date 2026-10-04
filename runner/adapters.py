@@ -49,6 +49,24 @@ def pin_prepared_images():
 class Cancelled(RuntimeError): pass
 class EngineUnavailable(RuntimeError): pass
 
+def checkstyle_report(raw: str):
+    # Never process XML entities, and keep processing errors distinct from findings.
+    if '<!DOCTYPE' in raw or '<!ENTITY' in raw:raise ValueError('Unexpected XML entities in scanner output')
+    import xml.etree.ElementTree as ET
+    try:report=ET.fromstring(raw)
+    except ET.ParseError:raise ValueError('Malformed Checkstyle report') from None
+    if report.tag!='checkstyle' or report.findall('.//exception'):raise ValueError('Invalid Checkstyle report')
+    if any(error.attrib.get('source') in ('com.puppycrawl.tools.checkstyle.Checker','com.puppycrawl.tools.checkstyle.TreeWalker') for error in report.findall('.//error')):
+        raise ValueError('Checkstyle could not process all source files')
+    return report
+
+def checkstyle_violation_exit(raw: str, code: int) -> bool:
+    try:
+        count=sum(error.attrib.get('severity','error')=='error' for error in checkstyle_report(raw).findall('./file/error'))
+        # Checkstyle returns the number of violations; Linux container exits are 8-bit.
+        return count>0 and code>=0 and code==count%256
+    except (ValueError,TypeError):return False
+
 class Executor:
     def __init__(self, mode='container', cancel: threading.Event | None=None, cache: Path | None=None):
         if mode not in ('container','native'):raise ValueError('scanner_mode must be container or native')
@@ -96,7 +114,7 @@ class Executor:
                         if self.mode=='container':
                             subprocess.run([command[0],'rm','-f',container_name],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=20)
             raw=stdout_path.read_text(errors='replace')
-            if process.returncode not in (0,1):
+            if process.returncode not in (0,1) and not (engine=='checkstyle' and checkstyle_violation_exit(raw,process.returncode)):
                 error=redact(stderr_path.read_text(errors='replace'))
                 if self.mode=='container' and ('No such image' in error or 'Cannot connect' in error or 'error during connect' in error or 'not found' in error):raise EngineUnavailable(error)
                 raise RuntimeError(f'{engine} exited {process.returncode}: {error[:1000]}')
@@ -213,10 +231,7 @@ def lint(root: Path,inv: dict,executor: Executor,policy: dict) -> tuple[list[dic
                 if 'TypeScript' in languages:coverage.append('TypeScript')
             elif engine=='checkstyle':
                 raw,_=executor.command(engine,['-c','/rules/checkstyle.xml','-f','xml','/src'],root)
-                # Do not process external XML entities.
-                if '<!DOCTYPE' in raw or '<!ENTITY' in raw:raise ValueError('Unexpected XML entities in scanner output')
-                import xml.etree.ElementTree as ET
-                for file in ET.fromstring(raw).findall('file'):
+                for file in checkstyle_report(raw).findall('file'):
                     for m in file.findall('error'):findings.append(make_finding(m.attrib.get('source','checkstyle'),m.attrib.get('message','Java coding violation'),file.attrib['name'].removeprefix('/src/'),int(m.attrib.get('line',1)) or 1,'','low','quality',impact='Coding standards aid reviewability.',remediation='Apply the bundled Checkstyle rule.',engine='lint'))
             elif engine=='staticcheck':
                 raw,_=executor.command(engine,['-f','json','./...'],root,timeout=600)
