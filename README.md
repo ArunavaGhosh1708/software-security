@@ -129,9 +129,12 @@ Cloud AI is disabled until an API key is configured and AI is enabled on the ind
 AI_API_KEY=your-gemini-api-key
 AI_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai
 AI_MODEL=gemini-3.8-flash
+AI_FALLBACK_MODELS=gemini-3.7-flash
 ```
 
 Restart the application after changing these values, then enable AI and snippet retention in the individual project's settings. Keep the key out of Git and do not prefix it with `NEXT_PUBLIC_`. You can select another compatible Gemini model using `AI_MODEL`; other providers remain supported by setting their HTTPS OpenAI-compatible `AI_BASE_URL` and corresponding key/model.
+
+For Gemini, temporary service errors, network failures, and timeouts retry the primary and then use Gemini 3.7 Flash by default. Set `AI_FALLBACK_MODELS` to up to two comma-separated Gemini model IDs to customize the order, or an explicitly empty value to disable fallback. All attempts use the same Google endpoint/key and selected redacted finding within one 45-second deadline. Authentication, quota, and safety failures do not trigger fallback. Other providers have no automatic Gemini fallback. The result, download, and audit trail identify fallback use; generated fixes remain unvalidated. Model access and availability depend on your provider account.
 
 Only redacted finding context is supplied to the configured provider (Google for the default configuration). The model receives no tools or execution access. Output is a reviewable, unvalidated suggestion and can be downloaded. Curated explanations and supported fix templates work without AI. Cloud provider charges and data handling are separate from this project's free core.
 

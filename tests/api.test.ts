@@ -44,6 +44,7 @@ test('AI suggestions default to Gemini and redact request and response credentia
     });
     const response=await call(`findings/${finding}/ai`,'POST',owner,{});
     assert.equal(response.status,200);assert.equal(requests,1);
+    assert.equal(response.data.model,'gemini-3.8-flash');assert.equal(response.data.requested_model,'gemini-3.8-flash');assert.equal(response.data.fallback_used,false);
     assert.equal(response.data.validation,'unvalidated');assert(!response.data.text.includes('response-fixture-value'));
   } finally {
     for(const [name,value] of Object.entries({AI_API_KEY:previous.key,AI_MODEL:previous.model,AI_BASE_URL:previous.url})) {

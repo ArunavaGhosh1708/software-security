@@ -8,6 +8,7 @@ export default function AiSuggestion({findingId,project,providerConfigured,canWr
   findingId:string;project?:Project;providerConfigured?:boolean;canWrite:boolean;onConfigure:()=>void;
 }) {
   const [pending,setPending]=useState(false),[error,setError]=useState(''),[text,setText]=useState('');
+  const [model,setModel]=useState(''),[requestedModel,setRequestedModel]=useState('');
   const needsSettings=!!project&&(!project.ai_enabled||project.metadata_only);
   const reason=!canWrite?'Maintainer access is required to request an AI suggestion.':
     !project?'Project settings are unavailable. Refresh the workspace.':
@@ -19,11 +20,12 @@ export default function AiSuggestion({findingId,project,providerConfigured,canWr
     !providerConfigured?'The AI provider is not configured. Set AI_API_KEY and AI_MODEL on the server.':'';
   async function suggest() {
     if(reason||pending)return;
-    setPending(true);setError('');setText('');
+    setPending(true);setError('');setText('');setModel('');setRequestedModel('');
     try {
       const result=await api(`findings/${findingId}/ai`,'POST',{});
       if(typeof result.text!=='string'||!result.text.trim())throw new Error('The provider returned no suggestion. Try again.');
       setText(result.text);
+      setModel(result.model??'');setRequestedModel(result.requested_model??'');
     } catch(e) {setError(e instanceof Error?e.message:'AI request failed. Try again.');}
     finally {setPending(false);}
   }
@@ -38,6 +40,6 @@ export default function AiSuggestion({findingId,project,providerConfigured,canWr
     </div>
     {pending&&<p role="status">Waiting for the AI provider…</p>}
     {error&&<div className="banner error" role="alert"><TriangleAlert size={17}/>{error}</div>}
-    {text&&<><h3>AI proposal · unvalidated</h3><pre className="ai-output">{text}</pre><button className="button" onClick={()=>download('ai-suggestion.txt',text)}>Download suggestion</button></>}
+    {text&&<><h3>AI proposal · unvalidated</h3>{model&&<p>Generated with {model}{requestedModel&&model!==requestedModel?` · fallback from ${requestedModel}`:''}.</p>}<pre className="ai-output">{text}</pre><button className="button" onClick={()=>download('ai-suggestion.txt',`${model?`Model: ${model}\nRequested model: ${requestedModel}\nValidation: unvalidated\n\n`:''}${text}`)}>Download suggestion</button></>}
   </section>;
 }

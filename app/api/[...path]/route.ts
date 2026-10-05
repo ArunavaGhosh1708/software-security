@@ -12,7 +12,7 @@ import {cleanup} from '@/lib/retention';
 import {workbenchApi} from '@/lib/workbench-api';
 import {summary} from '@/lib/workbench';
 import {authOptions} from '@/lib/auth-config';
-import {aiSuggestion} from '@/lib/ai';
+import {aiFallbackModels,aiSuggestion} from '@/lib/ai';
 
 export const runtime='nodejs';
 export const dynamic='force-dynamic';
@@ -141,8 +141,11 @@ async function route(request:Request, context:{params:Promise<{path:string[]}>})
         const provider=new URL(process.env.AI_BASE_URL??'https://generativelanguage.googleapis.com/v1beta/openai');
         check(provider.protocol==='https:'&&!provider.username&&!provider.password&&!provider.search&&!provider.hash,503,'AI provider must use an HTTPS base URL without credentials, query, or fragment.');
         await rateLimit(`ai:${s.org}`,10,3600);
-        const text=await aiSuggestion(provider,process.env.AI_API_KEY,process.env.AI_MODEL,f.data);
-        await audit(s,'ai.suggestion_requested',id);return ok({text,validation:'unvalidated'});
+        const fallbacks=aiFallbackModels(provider,process.env.AI_MODEL);
+        const result=await aiSuggestion(provider,process.env.AI_API_KEY,process.env.AI_MODEL,f.data,fallbacks);
+        await audit(s,'ai.suggestion_requested',id);
+        if(result.fallback_used)await audit(s,'ai.fallback_used',`${id}:${result.model}`);
+        return ok({...result,validation:'unvalidated'});
       }
     }
     if(path[0]==='alerts'&&path.length===2&&method==='PATCH') {
