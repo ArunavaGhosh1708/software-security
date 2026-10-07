@@ -6,8 +6,18 @@ import {DEFAULT_POLICY,type ScanReport} from '../lib/types';
 import {enqueue,claim,finish} from '../lib/scans';
 import {history,operationalHealth,operationsApi} from '../lib/operations';
 import {standardsCoverage} from '../lib/standards';
+import {analytics} from '../lib/analytics';
 process.env.DATABASE_MODE='embedded';process.env.TEST_DATABASE='true';
 after(closeDatabase);
+test('assessment trends use UTC calendar days and exclude other workspaces',async()=>{
+  const {s,project}=await fixture();
+  const scan=await enqueue(s,project);
+  const when=new Date(Date.now()-86400000);when.setUTCHours(0,30,0,0);
+  await db.query('UPDATE scans SET created_at=$1 WHERE id=$2',[when.toISOString(),scan.id]);
+  const result=await analytics(s.org,project);
+  assert.equal(result.scans.length,1);assert.equal(result.scans[0].day,when.toISOString().slice(0,10));
+  assert.equal((await analytics(randomUUID(),null)).scans.length,0);
+});
 async function fixture(source='local') {
   const org=randomUUID(),project=randomUUID(),user=randomUUID(),rid=randomUUID();
   await db.query('INSERT INTO organizations(id,name) VALUES($1,$2)',[org,'Operations fixture']);

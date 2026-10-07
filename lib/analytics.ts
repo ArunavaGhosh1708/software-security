@@ -1,6 +1,6 @@
 import {db} from './db';
 export async function analytics(org:string,project:string|null) {
-  const scans=await db.query(`SELECT date_trunc('day',created_at) AS day,count(*)::integer AS scans,
+  const scans=await db.query(`SELECT to_char(created_at AT TIME ZONE 'UTC','YYYY-MM-DD') AS day,count(*)::integer AS scans,
     count(*) FILTER(WHERE gate='pass')::integer AS passed,count(*) FILTER(WHERE gate='fail')::integer AS failed,
     count(*) FILTER(WHERE gate='incomplete')::integer AS incomplete
     FROM scans WHERE organization_id=$1 AND ($2::uuid IS NULL OR project_id=$2) AND created_at>now()-interval '30 days'

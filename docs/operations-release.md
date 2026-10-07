@@ -34,9 +34,19 @@ Run `python -m runner.cli doctor --config CONFIG` for prerequisites. It checks D
 
 Before deploying, back up the hosted PostgreSQL database using the database provider's backup/export procedure and protect the export as sensitive data. Schema additions are additive and initialized under an advisory transaction lock. A code rollback must preserve these additions; historical data should not be removed to roll back a UI. Restore rehearsals, migration rollback drills, operational SLOs and high availability remain unverified requirements.
 
-The linked GitHub `main` branch deploys to the existing Sentinel Vercel project. Configure `CRON_SECRET` only in production. Vercel sends its Bearer credential to `/api/maintenance/cleanup` daily at 06:00 UTC; manual unauthenticated calls must be rejected. Never expose this secret to browser JavaScript. Cleanup is throttled and records retention actions. Verify the deployment commit, protected endpoint, cron schedule and private-runner health after release.
+The linked GitHub `main` branch deploys to the existing Sentinel Vercel project. Configure `CRON_SECRET` only in production. Vercel sends its Bearer credential to `/api/maintenance/cleanup` daily at 06:00 UTC; manual unauthenticated calls must be rejected. Never expose this secret to browser JavaScript. Cleanup is throttled. Verify the deployment commit, protected endpoint, cron schedule and private-runner health after release.
 
 ## Open roadmap and assurance work
+
+## Verification recorded October 7
+
+The final regression run passed 62 Node tests and 53 Python runner tests. TypeScript and the production build passed. Real Opengrep SSRF vulnerable/corrected fixtures, real ZAP passive testing and isolated cookie-authenticated protected-endpoint testing passed. These are bounded controls, not an exhaustive detector benchmark.
+
+The production release was verified as Ready on Vercel. Signed-in Operations reported one online scoped runner for each existing project. Assessments submitted through the production UI completed: EvalsAI at revision `a9ed2a1ac420` passed its advisory gate; Sentinel at `275413fb9acb` reported incomplete lint coverage because C# Roslyn and Go Staticcheck compiler analysis had not been opted into. Other required engines completed. This limitation must not be hidden or converted into a pass.
+
+Production `/api/v1/health` returned 200; unauthenticated Operations and maintenance requests returned 401. Vercel displayed the enabled daily 06:00 UTC retention schedule, and its authenticated Run action returned 200 in runtime logs. No real application DAST URL or log collector was configured for either project: that setup belongs to each project's user.
+
+## Remaining assurance and product work
 
 | Area | Remaining work |
 | --- | --- |
