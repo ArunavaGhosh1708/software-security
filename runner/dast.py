@@ -52,6 +52,7 @@ def scan_dast(root: Path,target: dict | None,settings: dict,cancel: threading.Ev
             docker(['network','create','--internal',network])
             docker(['run','-d','--pull=never','--name',guard,'--network','bridge','--add-host','host.docker.internal:host-gateway',
               '--read-only','--cap-drop=ALL','--security-opt=no-new-privileges','--pids-limit=64','--memory=256m','--cpus=1',
+              '--tmpfs','/tmp:rw,nosuid,nodev,size=16777216',
               '--mount',f'type=bind,source={guard_config.resolve()},target=/config,readonly',image_ref('dast-guard')])
             docker(['network','connect','--alias','guard',network,guard])
             command=['docker','run','--rm','--pull=never','--name',scanner,'--network',network,'--read-only','--cap-drop=ALL',
@@ -84,8 +85,11 @@ def scan_dast(root: Path,target: dict | None,settings: dict,cancel: threading.Ev
                         import hashlib
                         f['endpoint']=endpoint;f['environment']=target['environment'];f['engine_version']=version;f['fingerprint']=hashlib.sha256(f"dast:{target['environment']}:{f['rule']}:{endpoint}:{instance.get('param','')}".encode()).hexdigest();findings.append(f)
             limitations=['Only discovered routes and supplied API definitions were tested.',
-              'The guarded bridge strips cookies and rewrites redirects. Cookie/session controls and multi-step browser authentication require manual review.',
-              'Header-based authentication is supported through local credential references; browser login workflows are not yet supported.']
+              'The bridge injects a fixed authorized header or cookie; dynamic sessions, cookie controls, browser login, and AJAX coverage require manual review.']
+            if credential:
+                if not target.get('verify_path'):limitations.append('PARTIAL: Credentials supplied without a protected verification endpoint; authenticated coverage is unverified.')
+                denied=docker(['exec',guard,'python','-c','from pathlib import Path; print(Path("/tmp/auth-denied").exists())'],False)
+                if denied.returncode or denied.stdout.strip()=='True':limitations.append('PARTIAL: Authenticated coverage was denied or could not be verified; review session expiry and access-control responses.')
             return findings,execution('dast','completed',start,[url],limitations,version)
     except Cancelled:raise
     except Exception as error:return [],execution('dast','failed',start,[],[],version,str(error))

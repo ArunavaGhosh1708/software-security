@@ -9,6 +9,7 @@ export async function cleanup(force=false) {
     await t.query("DELETE FROM findings WHERE last_seen<now()-interval '30 days' AND NOT EXISTS(SELECT 1 FROM scan_findings sf WHERE sf.finding_id=findings.id)");
     await t.query("DELETE FROM alerts WHERE last_seen<now()-interval '30 days'");
     await t.query("DELETE FROM github_deliveries WHERE received_at<now()-interval '7 days'");
+    await t.query("DELETE FROM invitations WHERE expires_at<now()-interval '30 days'");
     await t.query("DELETE FROM rate_limits WHERE resets_at<now() AND key<>'maintenance:retention'");
     return true;
   });

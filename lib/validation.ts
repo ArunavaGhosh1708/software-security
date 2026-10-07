@@ -8,7 +8,7 @@ export const policySchema = z.object({
   version: z.literal(1), mode: z.enum(['advisory','enforce']),
   checks: z.array(z.enum(['guardrails','quality','opengrep','gitleaks','trivy','lint','dast'])).min(1).max(7),
   exclusions: z.array(z.string().min(1).max(200)).max(100),
-  gate: z.object({severities: z.array(severity), new_only: z.boolean(), rules: z.array(z.string().max(200)).max(100)}).strict(),
+  gate: z.object({severities: z.array(severity), new_only: z.boolean(), rules: z.array(z.string().max(200)).max(100),min_imported_coverage:z.number().min(0).max(100).optional(),max_python_function_complexity:z.number().int().min(1).max(1000).optional()}).strict(),
   architecture: z.array(z.object({from: z.string().max(200), forbidden: z.array(z.string().max(200)).max(50)}).strict()).max(50),
   unsafe_apis: z.array(z.string().max(200)).max(100), compiler_analysis: z.boolean(),
   monitoring: z.object({window_seconds: z.number().int().min(30).max(3600), auth_failure_threshold: z.number().int().min(2).max(1000), denied_threshold: z.number().int().min(2).max(10000)}).strict()
@@ -25,6 +25,7 @@ export const targetSchema = z.object({
   environment: z.enum(['local','staging']), active: z.boolean().default(false),
   authorized: z.literal(true), exclusions: z.array(z.string().max(300)).max(50).default([]),
   openapi: relativePath.optional(), credential_ref: z.string().regex(/^[A-Z0-9_]{1,80}$/).optional()
+  ,credential_type:z.enum(['authorization','cookie']).optional(),verify_path:z.string().max(300).refine(p=>p.startsWith('/')&&!p.startsWith('//')&&!p.includes('..')&&!p.includes('\\')&&!p.includes('?')&&!p.includes('#'),'Use an in-scope absolute path without traversal or query.').optional(),success_marker:z.string().min(1).max(200).optional()
 }).strict();
 export const projectSchema = z.object({
   name: z.string().trim().min(2).max(100), source_type: z.enum(['local','github']),
@@ -41,6 +42,7 @@ export const findingSchema = z.object({
   severity, confidence: z.enum(['high','medium','low']), category: z.enum(['security','quality','architecture','suspicious']),
   title: z.string().max(500), path: z.string().max(500).optional(), line: z.number().int().positive().optional(), endpoint: targetSchema.shape.url.transform(value=>new URL(value).href).optional(),
   evidence: z.string().max(12000).optional(), impact: z.string().max(5000), remediation: z.string().max(10000),
+  source_context:z.string().max(6000).optional(),
   cwe: z.array(z.string().max(50)).max(20).optional(), standards: z.array(z.string().max(100)).max(20).optional(),
   source_revision:z.string().regex(/^[a-f0-9]{40}$/).optional(),
   environment:z.enum(['local','staging']).optional(),

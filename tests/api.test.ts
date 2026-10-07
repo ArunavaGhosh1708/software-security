@@ -93,3 +93,24 @@ test('authenticated endpoints enforce cross-tenant, role, origin, scope, and met
   assert.equal((await call('runners/'+runner.id,'DELETE',owner)).status,200);
   assert.equal((await call('runner/claim','POST',undefined,{}, {Authorization:`Bearer ${runner.token}`})).status,401);
 });
+test('versioned APIs, shared views and per-project collector health retain organization boundaries',async()=>{
+  const owner=randomUUID(),viewer=randomUUID(),other=randomUUID();
+  const org=(await call('overview','GET',owner)).data.session.org;
+  await call('members','POST',owner,{user_id:viewer,role:'viewer'});
+  const project=(await call('projects','POST',owner,{name:'Collector fixture',source_type:'local',source_ref:'collector'})).data;
+  const runner=(await call('runners','POST',owner,{name:'Collector runner',project_ids:[project.id]})).data;
+  const health={project_id:project.id,source:'a'.repeat(24),environment:'staging',events:0,unparsed:0,status:'healthy'};
+  assert.equal((await call('runner/collector-status','POST',undefined,health,{Authorization:`Bearer ${runner.token}`})).status,200);
+  const operations=(await call('v1/operations','GET',owner)).data.projects[0];assert.equal(operations.collectors[0].status,'healthy');assert.equal(operations.last_event,null);
+  assert.equal((await call('v1/operations','GET',other)).data.projects.length,0);
+  assert.equal((await call('v1/openapi','GET',owner)).data.openapi,'3.1.0');
+  assert.equal((await call('views','POST',owner,{name:'Team review',filters:{},shared:true})).status,201);
+  const shared=(await call('views','GET',viewer)).data;assert.equal(shared.length,1);assert.equal(shared[0].owned,false);
+  assert.equal((await call('views','GET',other)).data.length,0);
+  assert.equal((await call('views','POST',viewer,{name:'Denied',filters:{},shared:true})).status,403);
+  assert.equal((await call(`views/${shared[0].id}`,'DELETE',viewer)).status,404);
+  assert.equal((await call('analytics','GET',owner)).status,200);
+  assert.equal((await call('v1/organizations','GET',owner)).data[0].id,org);
+  const queued=await call(`v1/projects/${project.id}/scans`,'POST',owner,{}, {'Idempotency-Key':'api-fixture-key'});
+  assert.equal((await call(`v1/projects/${project.id}/scans`,'POST',owner,{}, {'Idempotency-Key':'api-fixture-key'})).data.id,queued.data.id);
+});

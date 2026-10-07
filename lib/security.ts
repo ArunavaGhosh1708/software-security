@@ -8,7 +8,7 @@ export function check(condition: unknown, status: number, message: string): asse
 export const hashToken = (token: string) => createHash('sha256').update(token).digest('hex');
 export function equal(a: string, b: string) {const aa = Buffer.from(a), bb = Buffer.from(b); return aa.length === bb.length && timingSafeEqual(aa, bb);}
 export function redact(text: string): string {
-  return text.replace(/(?:gh[pousr]_[A-Za-z0-9]{15,}|AKIA[A-Z0-9]{16}|sk-[A-Za-z0-9_-]{16,})/g, '[REDACTED]')
+  return text.replace(/-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----[\s\S]*?-----END (?:[A-Z ]+ )?PRIVATE KEY-----/g,'[REDACTED PRIVATE KEY]').replace(/(?:gh[pousr]_[A-Za-z0-9]{15,}|AKIA[A-Z0-9]{16}|sk-[A-Za-z0-9_-]{16,})/g, '[REDACTED]')
     .replace(/((?:authorization|proxy-authorization)["']?\s*[=:]\s*)(?:"[^"]*"|'[^']*'|[^\r\n]+)/gi, '$1[REDACTED]')
     .replace(/eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{8,}/g, '[REDACTED JWT]')
     .replace(/((?:password|passwd|secret|credential|api[_-]?key|token|authorization|cookie)["']?\s*[=:]\s*)(?:"[^"]*"|'[^']*'|[^\s,;}]+)/gi, '$1[REDACTED]')
@@ -35,6 +35,14 @@ async function userId(request: Request) {
   const response = await fetch(`${url}/auth/v1/user`, {headers: {authorization: `Bearer ${token}`, apikey: key}, signal: AbortSignal.timeout(10000)});
   check(response.ok, 401, 'Invalid or expired session.');
   const user = await response.json(); check(typeof user.id === 'string', 401, 'Invalid identity.'); return user.id as string;
+}
+export async function verifiedEmail(request:Request,user:string) {
+  const token=request.headers.get('authorization')?.match(/^Bearer (.+)$/)?.[1];
+  check(token&&process.env.SUPABASE_URL&&process.env.SUPABASE_ANON_KEY,403,'Invitations require a verified Supabase email identity.');
+  const response=await fetch(`${process.env.SUPABASE_URL}/auth/v1/user`,{headers:{authorization:`Bearer ${token}`,apikey:process.env.SUPABASE_ANON_KEY},redirect:'error',signal:AbortSignal.timeout(10000)});
+  check(response.ok,401,'Identity verification failed.');const identity=await response.json();
+  check(identity.id===user&&typeof identity.email==='string'&&identity.email_confirmed_at,403,'Verify your email before accepting a workspace invitation.');
+  return identity.email.trim().toLowerCase() as string;
 }
 export interface Session {user: string; org: string; role: Role}
 export async function session(request: Request): Promise<Session> {

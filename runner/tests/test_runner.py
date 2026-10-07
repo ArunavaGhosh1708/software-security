@@ -104,8 +104,9 @@ def test_collector_allowlists_sensitive_fields():
     assert normalize(json.dumps({**payload,'timestamp':'2026-09-30T20:00:00'}),'key','local') is None
 
 def test_collector_retry_does_not_advance_checkpoint(tmp_path):
+    import datetime as dt
     log=tmp_path/'app.log';checkpoint=tmp_path/'checkpoint.json'
-    log.write_text(json.dumps({'timestamp':'2026-09-30T20:00:00Z','path':'/login'})+'\n')
+    log.write_text(json.dumps({'timestamp':dt.datetime.now(dt.timezone.utc).isoformat(),'path':'/login'})+'\n')
     class Failing:
         def post(self,*a,**k):raise RuntimeError('offline')
     with pytest.raises(RuntimeError):collect_once(Failing(),'project',log,checkpoint,'local')

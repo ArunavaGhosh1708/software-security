@@ -7,7 +7,7 @@ export interface FindingInput {
   severity: Severity; confidence: 'high' | 'medium' | 'low';
   category: 'security' | 'quality' | 'architecture' | 'suspicious';
   title: string; path?: string; line?: number; endpoint?: string;
-  evidence?: string; impact: string; remediation: string; cwe?: string[];
+  evidence?: string; source_context?:string; impact: string; remediation: string; cwe?: string[];
   standards?: string[]; patch?: string; limitation?: string; source_revision?: string; environment?: 'local'|'staging';
   dependency?: {name:string;version:string;fixed_version?:string;purl?:string;ecosystem?:string};
   vulnerability_id?:string; cvss?:number;
@@ -25,7 +25,7 @@ export interface ScanReport {
 export interface Policy {
   version: 1; mode: 'advisory' | 'enforce';
   checks: string[]; exclusions: string[];
-  gate: {severities: Severity[]; new_only: boolean; rules: string[]};
+  gate: {severities: Severity[]; new_only: boolean; rules: string[]; min_imported_coverage?:number;max_python_function_complexity?:number};
   architecture: {from: string; forbidden: string[]}[];
   unsafe_apis: string[]; compiler_analysis: boolean;
   monitoring: {window_seconds: number; auth_failure_threshold: number; denied_threshold: number};

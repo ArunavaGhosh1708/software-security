@@ -1,5 +1,41 @@
 # Original Sentinel rules. SPDX-License-Identifier: MIT
 rules:
+  - id: sentinel.express-ssrf-taint
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: HTTP request input controls an outbound URL. Validate scheme, resolved destination and redirects against an explicit allowlist.
+    mode: taint
+    pattern-sources:
+      - pattern: $REQ.query.$PARAM
+      - pattern: $REQ.body.$PARAM
+      - pattern: $REQ.params.$PARAM
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: fetch($URL, ...)
+              - pattern: axios.get($URL, ...)
+          - focus-metavariable: $URL
+    metadata:
+      cwe: [CWE-918]
+      remediation: Map user selections to fixed authorized destinations; validate resolved addresses and every redirect. Do not rely on substring URL checks. Application reachability requires review.
+  - id: sentinel.python-ssrf-taint
+    languages: [python]
+    severity: ERROR
+    message: HTTP request input controls an outbound URL. Validate the destination and all redirects.
+    mode: taint
+    pattern-sources:
+      - pattern: request.args.get(...)
+      - pattern: request.form.get(...)
+      - pattern: request.GET.get(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: requests.get($URL, ...)
+              - pattern: requests.post($URL, ...)
+          - focus-metavariable: $URL
+    metadata:
+      cwe: [CWE-918]
+      remediation: Map user choices to fixed allowlisted destinations and restrict egress. Validate DNS results and redirect destinations; successful exploitation is not established by this finding.
   - id: sentinel.express-command-taint
     languages: [javascript, typescript]
     severity: ERROR

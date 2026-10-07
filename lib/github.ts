@@ -3,6 +3,7 @@ import { importPKCS8, SignJWT } from 'jose';
 import { db, transaction } from './db';
 import { check, equal } from './security';
 import {rawBody} from './validation';
+import {sourceSnapshot} from './scans';
 
 async function appJwt() {
   const id=process.env.GITHUB_APP_ID,key=process.env.GITHUB_APP_PRIVATE_KEY?.replace(/\\n/g,'\n');
@@ -38,7 +39,7 @@ export async function verifyRepository(repository: string, installationId: numbe
   check(response.ok,400,'Repository is not accessible to this GitHub App installation.');
 }
 export async function publishCheck(scan: Record<string,any>) {
-  const projects=await db.query('SELECT * FROM projects WHERE id=$1',[scan.project_id]);const p=projects[0];
+  const projects=await db.query('SELECT * FROM projects WHERE id=$1',[scan.project_id]);const p=projects[0]&&{...projects[0],...scan.source_snapshot};
   if(!p || p.source_type!=='github' || !/^[a-f0-9]{40}$/.test(scan.revision ?? ''))return;
   await installationAllowed(p.organization_id,Number(p.github_installation_id),p.source_ref);
   const response=await fetch(`https://api.github.com/repos/${p.source_ref}/check-runs`,{method:'POST',headers:{...apiHeaders(await installationToken(Number(p.github_installation_id),p.source_ref,true)),'Content-Type':'application/json'},
@@ -68,7 +69,9 @@ export async function githubWebhook(request: Request) {
   for(const p of projects){
     const connections=await t.query('SELECT repositories FROM github_installations WHERE organization_id=$1 AND installation_id=$2 AND revoked_at IS NULL',[p.organization_id,p.github_installation_id]);
     if(!connections.some(c=>c.repositories.some((r:{full_name:string})=>r.full_name.toLowerCase()===p.source_ref.toLowerCase())))continue;
-    await t.query('INSERT INTO scans(id,organization_id,project_id,requested_revision,policy) VALUES($1,$2,$3,$4,$5)',[randomUUID(),p.organization_id,p.id,sha,JSON.stringify(p.policy)]);queued++;
+    const branch=event.pull_request.head.ref;
+    const scope=typeof branch==='string'&&/^[A-Za-z0-9_./-]{1,120}$/.test(branch)&&!branch.includes('..')?(branch===p.default_branch?'default':`branch:${branch}`):`commit:${sha}`;
+    await t.query('INSERT INTO scans(id,organization_id,project_id,requested_revision,policy,source_snapshot,baseline_scope) VALUES($1,$2,$3,$4,$5,$6,$7)',[randomUUID(),p.organization_id,p.id,sha,JSON.stringify(p.policy),JSON.stringify(sourceSnapshot(p)),scope]);queued++;
   }
   return {queued};
   });

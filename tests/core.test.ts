@@ -43,6 +43,14 @@ test('gate distinguishes new vulnerabilities, baseline, advisory, and missing en
 test('stale vulnerability databases cannot pass required checks',()=>{
   assert.equal(evaluateGate({...policy(),checks:['trivy']},[{...report.executions[0],engine:'trivy',database_updated_at:'2020-01-01T00:00:00Z'}],[]),'incomplete');
 });
+test('quality thresholds fail low metrics and keep absent or invalid evidence incomplete',()=>{
+  const p={...policy(),checks:['quality'],gate:{...policy().gate,min_imported_coverage:80,max_python_function_complexity:5}};
+  const executions=[{...report.executions[0],engine:'quality'}];
+  assert.equal(evaluateGate(p,executions,[],{}),'incomplete');
+  assert.equal(evaluateGate(p,executions,[],{imported_coverage:{lcov:{percent:90}},python_functions:[{complexity:3}]}),'pass');
+  assert.equal(evaluateGate(p,executions,[],{imported_coverage:{lcov:{percent:70}},python_functions:[{complexity:3}]}),'fail');
+  assert.equal(evaluateGate(p,executions,[],{imported_coverage:{lcov:{percent:101}},python_functions:[{complexity:3}]}),'incomplete');
+});
 test('redaction removes credentials without exposing secret material',()=>{
   assert(!redact('api_key="hidden-value" authorization=Bearer abc').includes('hidden-value'));
   assert(!redact('AKIAABCDEFGHIJKLMNOP').includes('AKIA'));

@@ -22,6 +22,7 @@ DEFAULT_POLICY = {'version':1,'mode':'advisory','checks':['guardrails','quality'
  'compiler_analysis':False,'monitoring':{'window_seconds':300,'auth_failure_threshold':10,'denied_threshold':30}}
 
 def redact(text: str) -> str:
+    text=re.sub(r'-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----[\s\S]*?-----END (?:[A-Z ]+ )?PRIVATE KEY-----','[REDACTED PRIVATE KEY]',text)
     text = re.sub(r'(?:gh[pousr]_[A-Za-z0-9]{15,}|AKIA[A-Z0-9]{16}|sk-[A-Za-z0-9_-]{16,})', '[REDACTED]', text)
     text = re.sub(r'''((?:authorization|proxy-authorization)["']?\s*[=:]\s*)(?:"[^"]*"|'[^']*'|[^\r\n]+)''', r'\1[REDACTED]', text, flags=re.I)
     text = re.sub(r'eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{8,}', '[REDACTED JWT]', text)
@@ -209,11 +210,18 @@ def execution(engine: str,status: str,start: float,coverage: list[str],limitatio
     return result
 
 def quality(root: Path,inv: dict) -> tuple[list[dict],dict,dict]:
-    start=time.monotonic();lines=0;complexity=0;blocks:dict[str,list[str]]={};findings=[];coverage=[]
+    start=time.monotonic();lines=0;complexity=0;blocks:dict[str,list[str]]={};findings=[];functions=[];parse_errors=False;coverage_invalid=False
     for relative in inv['files']:
         file=root/relative
         if file.suffix not in LANGUAGES:continue
         text=file.read_text(errors='replace');content=text.splitlines();lines+=len(content)
+        if file.suffix=='.py':
+            from .quality_metrics import python_functions
+            try:
+                records=python_functions(text,relative)
+                if len(functions)+len(records)>2000:raise ValueError('Function metric limit exceeded')
+                functions.extend(records)
+            except (SyntaxError,ValueError,RecursionError):parse_errors=True
         file_complexity=1+len(re.findall(r'\b(?:if|elif|for|while|case|catch)\b|&&|\|\|',text));complexity+=file_complexity
         if file_complexity>40:findings.append(make_finding('quality.branch-density','High file branch density',relative,1,'','low','quality',
           'Dense branching can make security-sensitive behavior harder to review.','Split cohesive responsibilities and add focused tests.',engine='quality',confidence='low',limitation='Lexical file-level estimate, not function-level cyclomatic complexity.'))
@@ -225,14 +233,17 @@ def quality(root: Path,inv: dict) -> tuple[list[dict],dict,dict]:
         file=root/relative
         if file.name=='lcov.info':
             text=file.read_text(errors='replace');found=sum(map(int,re.findall(r'^LF:(\d+)',text,re.M)));hit=sum(map(int,re.findall(r'^LH:(\d+)',text,re.M)))
-            if found:coverage_reports[relative]={'lines_found':found,'lines_hit':hit,'percent':round(hit/found*100,2)}
+            if found and 0<=hit<=found:coverage_reports[relative]={'lines_found':found,'lines_hit':hit,'percent':round(hit/found*100,2)}
+            else:coverage_invalid=True
         elif file.name in ('coverage.xml','cobertura.xml'):
             # Parse only the root's numeric line-rate; never expand XML entities.
             match=re.search(r'<coverage\b[^>]*\bline-rate=["\']([\d.]+)',file.read_text(errors='replace'))
-            if match:coverage_reports[relative]={'percent':round(float(match[1])*100,2)}
+            if match and 0<=float(match[1])<=1:coverage_reports[relative]={'percent':round(float(match[1])*100,2)}
+            else:coverage_invalid=True
     metrics={'source_lines':lines,'branch_density_estimate':complexity,'duplicate_8_line_blocks':sum(1 for v in blocks.values() if len(v)>1),
       'imported_coverage':coverage_reports,'coverage_status':'imported' if coverage_reports else 'not_provided',
-      'limitations':['Complexity and duplication are lexical estimates. Coverage is imported, not measured by this scan.']}
+      'coverage_invalid':coverage_invalid,'python_functions':functions,'python_parse_errors':parse_errors,
+      'limitations':['File branching and duplication remain lexical estimates. Function metrics use Python syntax only; other languages are unsupported. Coverage is imported, not independently measured or revision-attested.']}
     return findings,metrics,execution('quality','completed',start,list(inv['languages']),metrics['limitations'])
 
 def load_policy(file: Path) -> dict:
@@ -256,7 +267,9 @@ def load_policy(file: Path) -> dict:
         if not isinstance(policy[key],list) or len(policy[key])>100 or not all(isinstance(x,str) and len(x)<=200 for x in policy[key]):raise ValueError('Invalid '+key)
     if type(policy['compiler_analysis']) is not bool:raise ValueError('compiler_analysis must be a boolean')
     gate=policy['gate']
-    if not isinstance(gate,dict) or set(gate)!={'severities','new_only','rules'} or type(gate['new_only']) is not bool or not isinstance(gate['severities'],list) or not set(gate['severities'])<= {'critical','high','medium','low','info'} or not isinstance(gate['rules'],list):raise ValueError('Invalid gate')
+    if not isinstance(gate,dict) or not {'severities','new_only','rules'}<=set(gate) or not set(gate)<={'severities','new_only','rules','min_imported_coverage','max_python_function_complexity'} or type(gate['new_only']) is not bool or not isinstance(gate['severities'],list) or not set(gate['severities'])<= {'critical','high','medium','low','info'} or not isinstance(gate['rules'],list):raise ValueError('Invalid gate')
+    if 'min_imported_coverage' in gate and (type(gate['min_imported_coverage']) not in (int,float) or not 0<=gate['min_imported_coverage']<=100):raise ValueError('Invalid coverage threshold')
+    if 'max_python_function_complexity' in gate and (type(gate['max_python_function_complexity']) is not int or not 1<=gate['max_python_function_complexity']<=1000):raise ValueError('Invalid complexity threshold')
     for boundary in policy['architecture']:
         if not isinstance(boundary,dict) or set(boundary)!={'from','forbidden'} or not isinstance(boundary['from'],str) or not isinstance(boundary['forbidden'],list) or not all(isinstance(x,str) for x in boundary['forbidden']):raise ValueError('Invalid architecture boundary')
     monitoring=policy['monitoring']

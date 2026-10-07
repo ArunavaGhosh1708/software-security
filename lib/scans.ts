@@ -9,10 +9,25 @@ export async function projectFor(org: string, id: string) {
   const rows = await db.query('SELECT * FROM projects WHERE id=$1 AND organization_id=$2', [id,org]);
   check(rows.length,404,'Project not found.'); return rows[0];
 }
-export async function enqueue(s: Session, projectId: string, revision?: string) {
+export function sourceSnapshot(p: Record<string,any>) {
+  return Object.fromEntries(['source_type','source_ref','components','target','metadata_only','github_installation_id','default_branch'].map(k=>[k,p[k]]));
+}
+export function baselineScope(p: Record<string,any>, revision?:string, branch?:string) {
+  if(branch) check(p.source_type==='github' && !!revision && /^[A-Za-z0-9_./-]{1,120}$/.test(branch) && !branch.includes('..'),400,'A branch baseline requires a GitHub commit and valid branch name.');
+  return branch ? (branch===p.default_branch?'default':`branch:${branch}`) : revision ? `commit:${revision}` : 'default';
+}
+export async function enqueue(s: Session, projectId: string, revision?: string, branch?:string,idempotencyKey?:string) {
   const p = await projectFor(s.org,projectId); const id = randomUUID();
   if (revision) check(/^[a-f0-9]{40}$/i.test(revision),400,'Requested revision must be a complete commit SHA.');
-  await db.query('INSERT INTO scans(id,organization_id,project_id,policy,requested_revision) VALUES($1,$2,$3,$4,$5)', [id,s.org,p.id,JSON.stringify(p.policy),revision ?? null]);
+  const scope=baselineScope(p,revision,branch);
+  if(idempotencyKey)check(/^[A-Za-z0-9_-]{8,128}$/.test(idempotencyKey),400,'Idempotency-Key must contain 8–128 letters, digits, underscores or hyphens.');
+  const rows=await db.query(`INSERT INTO scans(id,organization_id,project_id,policy,requested_revision,source_snapshot,baseline_scope,idempotency_key) VALUES($1,$2,$3,$4,$5,$6,$7,$8)
+    ON CONFLICT(organization_id,project_id,idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING RETURNING id`, [id,s.org,p.id,JSON.stringify(p.policy),revision ?? null,JSON.stringify(sourceSnapshot(p)),scope,idempotencyKey??null]);
+  if(!rows.length) {
+    const previous=(await db.query('SELECT id,status,requested_revision,baseline_scope FROM scans WHERE organization_id=$1 AND project_id=$2 AND idempotency_key=$3',[s.org,p.id,idempotencyKey]))[0];
+    check(previous&&previous.requested_revision===(revision??null)&&previous.baseline_scope===scope,409,'Idempotency key already used for a different revision or baseline.');
+    return {id:previous.id,status:previous.status,reused:true};
+  }
   await audit(s,'scan.queued',id); return {id,status:'queued'};
 }
 export async function claim(runner: Record<string,any>): Promise<Record<string,any> | null> {
@@ -32,7 +47,7 @@ export async function claim(runner: Record<string,any>): Promise<Record<string,a
     const job = rows[0], lease = randomUUID();
     await t.query(`UPDATE scans SET status='running',runner_id=$1,lease_token=$2,lease_until=now()+interval '90 seconds',
       attempts=attempts+1,started_at=coalesce(started_at,now()) WHERE id=$3`,[runner.id,lease,job.id]);
-    return {...job,lease_token:lease,attempts:job.attempts+1};
+    return {...job,...job.source_snapshot,lease_token:lease,attempts:job.attempts+1};
   });
 }
 export async function heartbeat(runner: Record<string,any>, id: string, lease: string) {
@@ -57,7 +72,10 @@ export async function finish(runner: Record<string,any>, id: string, lease: stri
     const project = (await t.query('SELECT * FROM projects WHERE id=$1 AND organization_id=$2',[scan.project_id,scan.organization_id]))[0];
     // A PR/explicit commit is not evidence that a default-branch finding was fixed.
     // Until branch baselines are modeled, enforce all findings on these assessments.
-    const revisionScoped=project.source_type==='github'&&!!scan.requested_revision;
+    const scope=scan.baseline_scope??'default';
+    const revisionScoped=scope!=='default';
+    const conservative=scope.startsWith('commit:');
+    const metadataOnly=project.metadata_only||scan.source_snapshot?.metadata_only;
     const entries: {finding: any; isNew: boolean; suppressed: boolean}[] = [];
     const observed: string[] = [];
     const keys=(f:ScanReport['findings'][number])=>f.category==='security'&&f.path&&f.line ? (f.cwe??[]).map(c=>JSON.stringify([f.path,f.line,c,f.source_revision])) : [];
@@ -67,19 +85,27 @@ export async function finish(runner: Record<string,any>, id: string, lease: stri
     }
     for (const raw of report.findings) {
       const related=Array.from(new Map([raw,...keys(raw).flatMap(key=>groups.get(key)??[])].map(other=>[other.fingerprint,other])).values()).slice(0,20);
-      const f = {...raw, standards:requirementsFor(raw.rule), evidence: project.metadata_only ? undefined : redact(raw.evidence ?? ''),
+      const f = {...raw, standards:requirementsFor(raw.rule), evidence: metadataOnly ? undefined : redact(raw.evidence ?? ''),
+        source_context:metadataOnly?undefined:raw.source_context?redact(raw.source_context):undefined,
         related_reports:related.map(other=>({fingerprint:other.fingerprint,engine:other.engine,rule:other.rule})),
-        patch:project.metadata_only ? undefined : raw.patch ? redact(raw.patch) : undefined,
+        patch:metadataOnly ? undefined : raw.patch ? redact(raw.patch) : undefined,
         title:redact(raw.title),impact:redact(raw.impact),remediation:redact(raw.remediation)};
       const existing = await t.query('SELECT f.id,f.status,s.expires_at FROM findings f LEFT JOIN suppressions s ON s.finding_id=f.id WHERE f.project_id=$1 AND f.fingerprint=$2',[scan.project_id,f.fingerprint]);
       const expired=existing[0]?.expires_at && new Date(existing[0].expires_at).getTime()<=Date.now();
-      const isNew = revisionScoped || !existing.length || existing[0].status === 'resolved' || !!expired, findingId = existing[0]?.id ?? randomUUID(); observed.push(f.fingerprint);
+      const scoped=existing.length?await t.query('SELECT status FROM finding_scopes WHERE finding_id=$1 AND scope=$2',[existing[0].id,scope]):[];
+      // The first assessment of a named branch compares with the default baseline.
+      const reference=revisionScoped&&!conservative&&!scoped.length&&existing.length?await t.query("SELECT status FROM finding_scopes WHERE finding_id=$1 AND scope='default'",[existing[0].id]):[];
+      const anyScope=existing.length?await t.query('SELECT 1 FROM finding_scopes WHERE finding_id=$1 LIMIT 1',[existing[0].id]):[];
+      const previous=scoped[0]?.status??reference[0]?.status??(!revisionScoped&&!anyScope.length?existing[0]?.status:undefined);
+      const isNew = conservative || !previous || previous === 'resolved' || !!expired, findingId = existing[0]?.id ?? randomUUID(); observed.push(f.fingerprint);
       if(expired)await t.query("UPDATE findings SET status='open' WHERE id=$1",[findingId]);
       await t.query(`INSERT INTO findings(id,organization_id,project_id,fingerprint,rule,engine,severity,category,title,data,revision)
         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT(project_id,fingerprint) DO UPDATE
         SET last_seen=now(),revision=excluded.revision,data=excluded.data,severity=excluded.severity,title=excluded.title,
         resolved_at=NULL,status=CASE WHEN findings.status='resolved' THEN 'open' ELSE findings.status END`,
       [findingId,scan.organization_id,scan.project_id,f.fingerprint,f.rule,f.engine,f.severity,f.category,f.title,JSON.stringify(f),report.revision]);
+      await t.query(`INSERT INTO finding_scopes(finding_id,scope,status,last_scan_id) VALUES($1,$2,'open',$3)
+        ON CONFLICT(finding_id,scope) DO UPDATE SET status='open',last_seen=now(),last_scan_id=excluded.last_scan_id`,[findingId,scope,id]);
       await t.query('INSERT INTO scan_findings(scan_id,finding_id,data,is_new) VALUES($1,$2,$3,$4)',[id,findingId,JSON.stringify(f),isNew]);
       const suppressed = await t.query('SELECT 1 FROM suppressions WHERE finding_id=$1 AND expires_at>now()',[findingId]);
       entries.push({finding:f,isNew,suppressed:suppressed.length>0});
@@ -88,9 +114,12 @@ export async function finish(runner: Record<string,any>, id: string, lease: stri
       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,[randomUUID(),id,e.engine,e.version,e.status,e.duration_ms,JSON.stringify(e.coverage),JSON.stringify(e.limitations),e.error ? redact(e.error) : null,e.database_updated_at ?? null]);
     // A partial/failed engine may not resolve prior findings. Empty coverage is not a successful assessment.
     const completed = report.executions.filter(e=>e.status==='completed' && e.coverage.length>0 && !e.limitations.some(x=>x.startsWith('PARTIAL:'))).map(e=>e.engine);
+    if(completed.length&&!conservative)await t.query(`UPDATE finding_scopes SET status='resolved',last_scan_id=$1 WHERE scope=$2 AND finding_id IN
+      (SELECT id FROM findings WHERE project_id=$3 AND engine=ANY($4::text[]) AND NOT(fingerprint=ANY($5::text[])))`,[id,scope,scan.project_id,completed,observed]);
     if (completed.length&&!revisionScoped) await t.query(`UPDATE findings SET status='resolved',resolved_at=now() WHERE project_id=$1
-      AND engine=ANY($2::text[]) AND NOT(fingerprint=ANY($3::text[])) AND status IN ('open','confirmed')`,[scan.project_id,completed,observed]);
-    const gate = evaluateGate(scan.policy,report.executions,entries);
+      AND engine=ANY($2::text[]) AND NOT(fingerprint=ANY($3::text[])) AND status IN ('open','confirmed')
+      AND NOT EXISTS(SELECT 1 FROM finding_scopes fs WHERE fs.finding_id=findings.id AND fs.scope LIKE 'branch:%' AND fs.status='open')`,[scan.project_id,completed,observed]);
+    const gate = evaluateGate(scan.policy,report.executions,entries,report.metrics);
     await t.query(`UPDATE scans SET status='completed',revision=$1,gate=$2,inventory=$3,metrics=$4,finished_at=now(),lease_until=NULL WHERE id=$5`,[report.revision,gate,JSON.stringify(report.inventory),JSON.stringify(report.metrics),id]);
     await audit({org:scan.organization_id,user:runner.id},'scan.completed',id,t);
     return {status:'completed',gate};

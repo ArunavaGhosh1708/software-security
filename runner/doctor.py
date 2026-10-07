@@ -19,7 +19,7 @@ def diagnose(settings):
         if available:
             try:ready=subprocess.run([docker,'image','inspect',image_ref(engine)],capture_output=True,timeout=10).returncode==0
             except (OSError,ValueError,subprocess.TimeoutExpired):pass
-        add(engine,ready,'Prepared image available' if ready else 'Run python -m runner.cli prepare --build-linters')
+        add(engine,ready,'Prepared image available' if ready else 'Cannot inspect images until Docker is reachable.' if not available else 'Run python -m runner.cli prepare --build-linters')
     fresh=False
     try:
         stamp=json.loads((Path(settings.get('cache_dir','.data/trivy-cache'))/'db/metadata.json').read_text()).get('UpdatedAt')

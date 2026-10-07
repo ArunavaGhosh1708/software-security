@@ -1,0 +1,22 @@
+import {test,after} from 'node:test';
+import assert from 'node:assert/strict';
+import {randomUUID} from 'node:crypto';
+import {db,closeDatabase} from '../lib/db';
+import {hashToken} from '../lib/security';
+import {acceptInvitation,invitationsApi} from '../lib/invitations';
+process.env.DATABASE_MODE='embedded';process.env.TEST_DATABASE='true';after(closeDatabase);
+test('invitations bind to email, expire, reject replay and cannot downgrade existing roles',async()=>{
+  const org=randomUUID(),owner=randomUUID(),user=randomUUID();await db.query('INSERT INTO organizations(id,name) VALUES($1,$2)',[org,'Invitation test']);
+  const s={org,user:owner,role:'owner' as const};
+  const create=()=>invitationsApi(new Request('http://localhost/api/invitations',{method:'POST',body:JSON.stringify({email:'Member@example.test',role:'viewer'})}),['invitations'],s);
+  const result=await (await create())!.json();
+  assert(!JSON.stringify(await db.query('SELECT * FROM invitations WHERE id=$1',[result.id])).includes(result.token));
+  await assert.rejects(()=>acceptInvitation({org,user,role:'viewer'},result.token,'wrong@example.test'));
+  await db.query('INSERT INTO memberships VALUES($1,$2,$3)',[org,user,'owner']);
+  await acceptInvitation({org,user,role:'viewer'},result.token,'member@example.test');
+  assert.equal((await db.query('SELECT role FROM memberships WHERE organization_id=$1 AND user_id=$2',[org,user]))[0].role,'owner');
+  await assert.rejects(()=>acceptInvitation({org,user,role:'viewer'},result.token,'member@example.test'));
+  const expired=await (await create())!.json();await db.query("UPDATE invitations SET expires_at=now()-interval '1 second' WHERE token_hash=$1",[hashToken(expired.token)]);
+  await assert.rejects(()=>acceptInvitation({org,user,role:'viewer'},expired.token,'member@example.test'));
+  await assert.rejects(()=>invitationsApi(new Request('http://localhost/api/invitations',{method:'POST',body:'{}'}),['invitations'],{org,user,role:'maintainer'}));
+});

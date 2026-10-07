@@ -67,16 +67,20 @@ class PinnedHTTPS(http.client.HTTPSConnection):
 
 def verify_target(scope: Scope):
     """Fail before scanning when connectivity, scope, or supplied credentials fail."""
-    path=scope.base_path or '/';address=scope.validate(path);scope.throttle()
+    path=scope.config.get('verify_path') or scope.base_path or '/';address=scope.validate(path);scope.throttle()
     scheme,host,port=scope.origin
     connection=PinnedHTTPS(host,port,address) if scheme=='https' else http.client.HTTPConnection(address,port,timeout=15)
     try:
         headers={'Host':urlsplit(scope.base).netloc,'Accept-Encoding':'identity'}
-        if scope.config.get('credential'):headers['Authorization']=scope.config['credential']
+        if scope.config.get('credential'):headers['Cookie' if scope.config.get('credential_type')=='cookie' else 'Authorization']=scope.config['credential']
         connection.request('GET',path,headers=headers);response=connection.getresponse()
         if response.status>=500:raise ValueError('Target is unavailable')
         if scope.config.get('credential') and response.status in (401,403):raise ValueError('Supplied target credentials were rejected')
         if response.getheader('Location'):scope.redirect(response.getheader('Location'),path)
+        if scope.config.get('verify_path'):
+            if response.status!=200 or response.getheader('Location'):raise ValueError('Authentication verification endpoint did not return HTTP 200')
+            marker=scope.config.get('success_marker')
+            if marker and marker not in response.read(65536).decode(errors='replace'):raise ValueError('Authentication success marker was not found')
     finally:connection.close()
 
 def handler(scope: Scope):
@@ -97,8 +101,9 @@ def handler(scope: Scope):
                 else:connection=http.client.HTTPConnection(address,port,timeout=15)
                 headers={k:v for k,v in self.headers.items() if k.lower() not in {'host','authorization','cookie','connection','proxy-authorization','transfer-encoding','accept-encoding'}}
                 headers['Host']=urlsplit(scope.base).netloc;headers['Accept-Encoding']='identity'
-                if scope.config.get('credential'):headers['Authorization']=scope.config['credential']
+                if scope.config.get('credential'):headers['Cookie' if scope.config.get('credential_type')=='cookie' else 'Authorization']=scope.config['credential']
                 connection.request(self.command,self.path,body=body,headers=headers);response=connection.getresponse()
+                if scope.config.get('credential') and response.status in (401,403):Path('/tmp/auth-denied').touch()
                 payload=response.read(2_000_001)
                 if len(payload)>2_000_000:raise ValueError('Response exceeds assessment limit')
                 location=response.getheader('Location')

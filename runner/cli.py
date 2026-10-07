@@ -30,12 +30,14 @@ def main():
     parser=argparse.ArgumentParser(description='Sentinel private runner and CI scanner')
     sub=parser.add_subparsers(dest='command',required=True)
     register=sub.add_parser('register');register.add_argument('--config',type=Path,required=True);register.add_argument('--alias',required=True);register.add_argument('--path',type=Path,required=True)
-    run=sub.add_parser('run');run.add_argument('--config',type=Path,required=True);run.add_argument('--once',action='store_true')
+    run=sub.add_parser('run');run.add_argument('--config',type=Path,required=True);run.add_argument('--once',action='store_true');run.add_argument('--drain-file',type=Path,help='Supervisor-owned marker: finish current scan, then exit')
     scan=sub.add_parser('scan');scan.add_argument('--path',type=Path,required=True);scan.add_argument('--config',type=Path);scan.add_argument('--checks');scan.add_argument('--enforce',action='store_true');scan.add_argument('--output',type=Path,default=Path('artifacts/report.json'));scan.add_argument('--baseline',type=Path);scan.add_argument('--compiler-analysis',action='store_true',help='Explicitly opt in to isolated offline compiler checks')
     collect=sub.add_parser('collect');collect.add_argument('--config',type=Path,required=True);collect.add_argument('--project',required=True);collect.add_argument('--log',type=Path,required=True);collect.add_argument('--checkpoint',type=Path,default=Path('.data/collector-checkpoint.json'));collect.add_argument('--environment',choices=['local','staging','production'],default='local');collect.add_argument('--once',action='store_true')
     prepare=sub.add_parser('prepare');prepare.add_argument('--cache',type=Path,default=Path('.data/trivy-cache'));prepare.add_argument('--build-linters',action='store_true')
     scan.add_argument('--sarif',type=Path,help='Also export SARIF 2.1.0 for code-scanning integrations')
     doctor=sub.add_parser('doctor');doctor.add_argument('--config',type=Path)
+    refresh=sub.add_parser('refresh-db');refresh.add_argument('--config',type=Path);refresh.add_argument('--cache',type=Path)
+    patch=sub.add_parser('validate-patch');patch.add_argument('--path',type=Path,required=True);patch.add_argument('--patch',type=Path,required=True)
     args=parser.parse_args()
     try:
         settings=settings_from(args.config) if getattr(args,'config',None) else {'scanner_mode':'container'}
@@ -45,6 +47,15 @@ def main():
         from .doctor import diagnose
         result=diagnose(settings)
         print(json.dumps(result,indent=2));return 0 if result['ready'] else 2
+    if args.command=='refresh-db':
+        from .maintenance import refresh_advisories
+        refresh_advisories(args.cache or Path(settings.get('cache_dir','.data/trivy-cache')))
+        print('Advisory databases refreshed.');return 0
+    if args.command=='validate-patch':
+        from .patches import validate_patch
+        try:result=validate_patch(args.path.resolve(strict=True),args.patch.resolve(strict=True))
+        except (OSError,ValueError) as error:parser.error(str(error))
+        print(json.dumps(result,indent=2));return 0 if result['applies_to_snapshot'] else 2
     if args.command=='register':
         import re
         if not re.fullmatch('[A-Za-z0-9_-]+',args.alias):parser.error('Alias must use letters, digits, underscores, or hyphens')
@@ -92,6 +103,7 @@ def main():
         print('Scanner images prepared and locked to immutable image IDs. Assessments do not pull images or update databases. Refresh databases regularly.');return 0
     if args.command=='run':
         while True:
+            if args.drain_file and args.drain_file.exists():return 0
             try:
                 picked=run_once(settings)
                 if args.once:return 0
@@ -107,7 +119,7 @@ def main():
         while True:
             try:
                 result=collect_once(client,args.project,args.log,args.checkpoint,args.environment)
-                if result['unparsed']:print(f"Skipped {result['unparsed']} unparseable log lines; monitoring coverage is partial.")
+                if result['unparsed']:print(f"Skipped {result['unparsed']} unusable log lines ({result.get('expired',0)} outside retention); monitoring coverage is partial.")
                 if args.once:return 0
                 time.sleep(2)
             except KeyboardInterrupt:return 0

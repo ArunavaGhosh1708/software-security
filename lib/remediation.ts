@@ -1,6 +1,6 @@
 import catalog from '../rules/remediation.json';
 
-type Finding = {engine:string;rule:string;path?:string;line?:number;source_revision?:string;endpoint?:string;remediation:string;limitation?:string;dependency?:{name:string;version:string;fixed_version?:string;ecosystem?:string}};
+type Finding = {engine:string;rule:string;path?:string;line?:number;source_revision?:string;source_context?:string;endpoint?:string;remediation:string;limitation?:string;dependency?:{name:string;version:string;fixed_version?:string;ecosystem?:string}};
 export type RemediationGuide = {summary:string;steps:string[];verification:string;limitation?:string;basis:string};
 const patternDefault='Pattern-based evidence. Verify input provenance and relevant controls; no exploit is proven.';
 

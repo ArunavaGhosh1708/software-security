@@ -4,6 +4,8 @@ const url=process.env.NEXT_PUBLIC_SUPABASE_URL,key=process.env.NEXT_PUBLIC_SUPAB
 export const supabase=url&&key?createClient(url,key,{auth:{flowType:'pkce',detectSessionInUrl:false}}):null;
 export async function api(path:string,method='GET',data?:unknown) {
   const headers:Record<string,string>={'Content-Type':'application/json'};
+  const organization=typeof window!=='undefined'?window.localStorage.getItem('sentinel.organization'):null;
+  if(organization)headers['x-organization-id']=organization;
   const session=supabase?(await supabase.auth.getSession()).data.session:null;
   if(session)headers.authorization=`Bearer ${session.access_token}`;
   const response=await fetch(`/api/${path}`,{method,headers,credentials:'same-origin',body:data===undefined?undefined:JSON.stringify(data)});

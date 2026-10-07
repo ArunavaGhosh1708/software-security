@@ -1,5 +1,6 @@
 import catalog from '../data/asvs-5.0.json';
 export const RULE_REQUIREMENTS:Record<string,string[]>={
+  'sentinel.express-ssrf-taint':['1.3.6'],'sentinel.python-ssrf-taint':['1.3.6'],
   'sentinel.express-command-taint':['1.2.5'],'sentinel.flask-command-taint':['1.2.5'],
   'sentinel.python-tls-disabled':['12.3.2'],'sentinel.node-tls-disabled':['12.3.2'],
   'sentinel.express-sql-taint':['1.2.4'],'sentinel.flask-django-sql-taint':['1.2.4'],
@@ -13,14 +14,14 @@ export function requirementsFor(rule:string){
   const match=Object.keys(RULE_REQUIREMENTS).find(k=>rule===k||rule.endsWith('.'+k));
   return match?RULE_REQUIREMENTS[match].map(id=>`ASVS-5.0.0:${id}`):[];
 }
-export function standardsCoverage(findings:Record<string,any>[],executions:Record<string,any>[]) {
+export function standardsCoverage(findings:Record<string,any>[],executions:Record<string,any>[],reviews:Record<string,any>[]=[] ) {
   const mapped=new Map<string,string[]>();
   for(const finding of findings)for(const ref of requirementsFor(finding.rule)){
     const id=ref.split(':')[1];mapped.set(id,[...(mapped.get(id)??[]),finding.id]);
   }
   const enginesRan=executions.some(e=>e.status==='completed'&&['guardrails','opengrep'].includes(e.engine));
   return {version:catalog.version,attribution:catalog.attribution,license:catalog.license,license_url:catalog.license_url,source:catalog.source,
-    requirements:catalog.requirements.map(r=>({...r,status:mapped.has(r.id)?'automated_evidence':
+    requirements:catalog.requirements.map(r=>({...r,manual_reviews:reviews.filter(review=>review.requirement_id===r.id).map(review=>({...review,current:new Date(review.expires_at).getTime()>Date.now()})),status:mapped.has(r.id)?'automated_evidence':
       Object.values(RULE_REQUIREMENTS).some(ids=>ids.includes(r.id))?(enginesRan?'manual_review':'not_run'):'unsupported',
       finding_ids:mapped.get(r.id)??[],limitation:'Automated findings are partial evidence; absence of findings does not verify this requirement.'}))};
 }

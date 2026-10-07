@@ -95,6 +95,7 @@ CREATE TABLE IF NOT EXISTS saved_views (
   user_id uuid NOT NULL, name text NOT NULL, filters jsonb NOT NULL, created_at timestamptz NOT NULL DEFAULT now(),
   UNIQUE(organization_id,user_id,name)
 );
+ALTER TABLE saved_views ADD COLUMN IF NOT EXISTS shared boolean NOT NULL DEFAULT false;
 CREATE TABLE IF NOT EXISTS threat_intelligence (
   organization_id uuid NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
   cve text NOT NULL, kev boolean, epss double precision, percentile double precision,
@@ -115,12 +116,54 @@ CREATE TABLE IF NOT EXISTS github_connect_states (
 );
 INSERT INTO schema_versions(version) VALUES (3) ON CONFLICT DO NOTHING;
 
+ALTER TABLE scans ADD COLUMN IF NOT EXISTS source_snapshot jsonb;
+ALTER TABLE scans ADD COLUMN IF NOT EXISTS snapshot_provenance text NOT NULL DEFAULT 'queued';
+ALTER TABLE scans ADD COLUMN IF NOT EXISTS baseline_scope text NOT NULL DEFAULT 'default';
+ALTER TABLE scans ADD COLUMN IF NOT EXISTS idempotency_key text;
+CREATE UNIQUE INDEX IF NOT EXISTS scan_submission_key ON scans(organization_id,project_id,idempotency_key) WHERE idempotency_key IS NOT NULL;
+-- Existing jobs have no historical scope snapshot; capture their present settings once.
+UPDATE scans s SET source_snapshot=jsonb_build_object('source_type',p.source_type,'source_ref',p.source_ref,
+  'components',p.components,'target',p.target,'metadata_only',p.metadata_only,
+  'github_installation_id',p.github_installation_id,'default_branch',p.default_branch),
+  snapshot_provenance='backfilled',baseline_scope=CASE WHEN s.requested_revision IS NOT NULL THEN 'commit:'||s.requested_revision ELSE 'default' END
+  FROM projects p WHERE p.id=s.project_id AND s.source_snapshot IS NULL;
+CREATE TABLE IF NOT EXISTS finding_scopes (
+  finding_id uuid NOT NULL REFERENCES findings(id) ON DELETE CASCADE, scope text NOT NULL,
+  status text NOT NULL CHECK(status IN ('open','resolved')), first_seen timestamptz NOT NULL DEFAULT now(),
+  last_seen timestamptz NOT NULL DEFAULT now(), last_scan_id uuid REFERENCES scans(id) ON DELETE SET NULL,
+  PRIMARY KEY(finding_id,scope)
+);
+CREATE INDEX IF NOT EXISTS scan_history ON scans(organization_id,created_at DESC,id);
+CREATE INDEX IF NOT EXISTS alert_history ON alerts(organization_id,last_seen DESC,id);
+CREATE INDEX IF NOT EXISTS audit_history ON audit_events(organization_id,created_at DESC,id);
+CREATE TABLE IF NOT EXISTS control_reviews (
+  project_id uuid NOT NULL REFERENCES projects(id) ON DELETE CASCADE, requirement_id text NOT NULL,
+  status text NOT NULL CHECK(status IN ('met','not_met','not_applicable','needs_review')),
+  evidence text NOT NULL, reviewer uuid NOT NULL, reviewed_at timestamptz NOT NULL DEFAULT now(),
+  expires_at timestamptz NOT NULL, PRIMARY KEY(project_id,requirement_id)
+);
+INSERT INTO schema_versions(version) VALUES (4) ON CONFLICT DO NOTHING;
+CREATE TABLE IF NOT EXISTS collector_sources (
+  project_id uuid NOT NULL REFERENCES projects(id) ON DELETE CASCADE, source text NOT NULL,
+  environment text NOT NULL, runner_id uuid NOT NULL REFERENCES runners(id) ON DELETE CASCADE,
+  last_seen timestamptz NOT NULL DEFAULT now(), events integer NOT NULL DEFAULT 0,
+  unparsed integer NOT NULL DEFAULT 0, status text NOT NULL,
+  PRIMARY KEY(project_id,source,environment)
+);
+ALTER TABLE collector_sources ADD COLUMN IF NOT EXISTS unparsed_total integer NOT NULL DEFAULT 0;
+CREATE TABLE IF NOT EXISTS invitations (
+  id uuid PRIMARY KEY, organization_id uuid NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  email text NOT NULL, role text NOT NULL CHECK(role IN ('maintainer','viewer')), token_hash text UNIQUE NOT NULL,
+  created_by uuid NOT NULL, expires_at timestamptz NOT NULL, accepted_at timestamptz, accepted_by uuid,
+  revoked_at timestamptz, created_at timestamptz NOT NULL DEFAULT now()
+);
+
 -- The app uses a privileged server connection and explicit tenant predicates. Direct
 -- Supabase clients have no table access; all access is mediated by authenticated APIs.
 DO $$ DECLARE t text; BEGIN
   FOREACH t IN ARRAY ARRAY['organizations','memberships','projects','runners','scans','executions','findings',
     'scan_findings','suppressions','runtime_events','alerts','audit_events','github_deliveries','rate_limits',
-    'finding_notes','saved_views','threat_intelligence','github_installations','github_connect_states'] LOOP
+    'finding_notes','saved_views','threat_intelligence','github_installations','github_connect_states','finding_scopes','control_reviews','collector_sources','invitations'] LOOP
     EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', t);
     IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname='anon') THEN
       EXECUTE format('REVOKE ALL ON %I FROM anon', t);

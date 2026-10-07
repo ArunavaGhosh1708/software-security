@@ -41,6 +41,23 @@ def assess(root: Path,settings: dict,policy: dict | None=None,components: list |
         if len(findings)>10000:raise RuntimeError('Assessment exceeds 10,000-finding limit; split project into components')
         # Preserve separate engine reports. Identical fingerprints within one engine collapse.
         findings=list({f['fingerprint']:f for f in findings}.values())
+        # Selected bounded context improves remediation; secrets and sensitive files are excluded.
+        from .core import safe_relative,redact
+        context_budget=200000
+        for finding in findings:
+            path=finding.get('path','')
+            if finding['engine']=='gitleaks' or Path(path).name.startswith('.env') or not path or context_budget<=0:continue
+            try:
+                file=safe_relative(copied,path)
+                from .core import LANGUAGES
+                if not file.is_file() or file.stat().st_size>200000 or (file.suffix not in LANGUAGES and file.name!='Dockerfile'):continue
+                text=file.read_text(encoding='utf-8')
+                if 'PRIVATE KEY-----' in text:continue
+                content=text.splitlines();line=finding.get('line',1)
+                start=max(0,line-5);end=min(len(content),start+(30 if file.name=='Dockerfile' else 9))
+                finding['source_context']=redact('\n'.join(f'{i+1}: {content[i]}' for i in range(start,end)))[:min(6000,context_budget)]
+                context_budget-=len(finding['source_context'])
+            except (OSError,ValueError,UnicodeError):pass
         return {'schema_version':1,'revision':local_revision,'inventory':inv,'findings':findings,
                 'executions':executions,'metrics':metrics,'policy':policy}
 
@@ -52,10 +69,22 @@ def gate(report: dict,baseline: set[str] | None=None) -> str:
         if check=='trivy':
             import datetime as dt
             stamp=e.get('database_updated_at') if e else None
-            if not stamp or (dt.datetime.now(dt.timezone.utc)-dt.datetime.fromisoformat(stamp.replace('Z','+00:00'))).total_seconds()>172800:incomplete=True
+            try:age=(dt.datetime.now(dt.timezone.utc)-dt.datetime.fromisoformat(stamp.replace('Z','+00:00'))).total_seconds() if stamp else -1
+            except (ValueError,TypeError):age=-1
+            if not 0<=age<=172800:incomplete=True
     violations=[f for f in report['findings'] if (not policy['gate']['new_only'] or f['fingerprint'] not in baseline)
       and (f['severity'] in policy['gate']['severities'] or f['rule'] in policy['gate']['rules'])]
-    if policy['mode']=='enforce' and violations:return 'fail'
+    metrics=report.get('metrics',{});metric_violation=False
+    if 'min_imported_coverage' in policy['gate']:
+        values=[r.get('percent') for r in metrics.get('imported_coverage',{}).values()]
+        if not values or any(type(v) not in (int,float) or not 0<=v<=100 for v in values) or metrics.get('coverage_invalid'):incomplete=True
+        else:metric_violation=any(v<policy['gate']['min_imported_coverage'] for v in values)
+    if 'max_python_function_complexity' in policy['gate']:
+        functions=metrics.get('python_functions',[])
+        if not functions or metrics.get('python_parse_errors') or any(type(f.get('complexity')) is not int or f['complexity']<1 for f in functions):incomplete=True
+        else:metric_violation=metric_violation or any(f['complexity']>policy['gate']['max_python_function_complexity'] for f in functions)
+    if any(key in policy['gate'] for key in ('min_imported_coverage','max_python_function_complexity')) and required.get('quality',{}).get('status')!='completed':incomplete=True
+    if policy['mode']=='enforce' and (violations or metric_violation):return 'fail'
     return 'incomplete' if incomplete else 'pass'
 
 class Client:
@@ -121,9 +150,12 @@ def run_once(settings: dict) -> bool:
             elif job['source_type']=='github':root=clone_github(job,Path(tmp)/'repository')
             else:raise ValueError('Unsupported project source type')
             report=assess(root,settings,job['policy'],job['components'],job['target'],cancel,job.get('verified_revision'))
+            # Legacy dashboards reject newly introduced normalized fields.
+            if 'source_snapshot' not in job:
+                for finding in report['findings']:finding.pop('source_context',None)
             # Metadata-only jobs must not transmit source snippets or patches.
             if job.get('metadata_only'):
-                for finding in report['findings']:finding.pop('evidence',None);finding.pop('patch',None)
+                for finding in report['findings']:finding.pop('evidence',None);finding.pop('patch',None);finding.pop('source_context',None)
             client.post('runner/finish',{**lease,'report':report},retries=3)
     except Exception as error:
         from .core import redact

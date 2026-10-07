@@ -1,6 +1,7 @@
 from __future__ import annotations
 import datetime as dt
 import hashlib
+import hmac
 import json
 import os
 import re
@@ -53,7 +54,7 @@ def collect_once(client: Client,project: str,log: Path,checkpoint: Path,environm
     stat=log.stat();identity=f'{stat.st_dev}:{stat.st_ino}';state={}
     if checkpoint.exists():state=json.loads(checkpoint.read_text())
     offset=state.get('offset',0) if state.get('identity')==identity and stat.st_size>=state.get('offset',0) else 0
-    events=[];bad=0
+    events=[];bad=0;expired=0
     with log.open('rb') as f:
         f.seek(offset)
         for _ in range(250):
@@ -65,6 +66,9 @@ def collect_once(client: Client,project: str,log: Path,checkpoint: Path,environm
                 bad+=1;continue
             event=normalize(line.decode(errors='replace'),'pending',environment)
             if event:
+                when=dt.datetime.fromisoformat(event['timestamp']);now=dt.datetime.now(dt.timezone.utc)
+                if when<now-dt.timedelta(days=7):bad+=1;expired+=1;continue
+                if when>now+dt.timedelta(seconds=60):raise ValueError('Log timestamp is more than 60 seconds in the future; correct the application clock before collecting. Checkpoint was not advanced.')
                 # Do not upload an unkeyed digest of passwords, bodies, or actor identifiers.
                 identity_fields=[identity,start,event['timestamp'],event['path'].split('?')[0],event.get('status'),environment]
                 event['event_key']=hashlib.sha256(json.dumps(identity_fields).encode()).hexdigest()
@@ -74,5 +78,11 @@ def collect_once(client: Client,project: str,log: Path,checkpoint: Path,environm
     if events:client.post('runner/events',{'project_id':project,'events':events},retries=3)
     # Only advance after successful delivery. API deduplication makes retries safe.
     checkpoint.parent.mkdir(parents=True,exist_ok=True);temporary=checkpoint.with_suffix('.tmp')
-    temporary.write_text(json.dumps({'identity':identity,'offset':offset}));temporary.replace(checkpoint)
-    return {'events':len(events),'unparsed':bad}
+    unparsed_total=min(1000000000,state.get('unparsed_total',0)+bad)
+    temporary.write_text(json.dumps({'identity':identity,'offset':offset,'unparsed_total':unparsed_total}));temporary.replace(checkpoint)
+    # A quiet log still has a healthy collector. Never upload its local filesystem path.
+    if getattr(client,'settings',None):
+        source=hmac.new(client.settings['token'].encode(),str(log.resolve()).encode(),hashlib.sha256).hexdigest()[:24]
+        try:client.post('runner/collector-status',{'project_id':project,'source':source,'environment':environment,'events':len(events),'unparsed':bad,'unparsed_total':unparsed_total,'status':'partial' if unparsed_total else 'healthy'})
+        except Exception:pass # Events were acknowledged; a health failure must not rewind them.
+    return {'events':len(events),'unparsed':bad,'expired':expired}

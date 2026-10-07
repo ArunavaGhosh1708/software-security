@@ -13,6 +13,9 @@ import {workbenchApi} from '@/lib/workbench-api';
 import {summary} from '@/lib/workbench';
 import {authOptions} from '@/lib/auth-config';
 import {aiFallbackModels,aiSuggestion} from '@/lib/ai';
+import {operationsApi} from '@/lib/operations';
+import {openApi} from '@/lib/openapi';
+import {invitationsApi} from '@/lib/invitations';
 
 export const runtime='nodejs';
 export const dynamic='force-dynamic';
@@ -20,9 +23,14 @@ const uuid=z.string().uuid();
 const ok=(data:unknown,status=200)=>NextResponse.json(data,{status,headers:{'Cache-Control':'no-store'}});
 async function route(request:Request, context:{params:Promise<{path:string[]}>}) {
   try {
-    const {path}=await context.params; const key=path.join('/'), method=request.method;
+    const params=await context.params;const path=params.path[0]==='v1'?params.path.slice(1):params.path; const key=path.join('/'), method=request.method;
     if(method!=='GET')verifyOrigin(request);
     if(key==='health')return ok({status:'ok',version:'0.1.0',database:process.env.DATABASE_MODE??'postgres',local_auth:localAuthAllowed(),google_auth:authOptions().google,github:!!process.env.GITHUB_APP_ID,ai:!!process.env.AI_API_KEY});
+    if(key==='maintenance/cleanup'&&['GET','POST'].includes(method)) {
+      check(process.env.CRON_SECRET&&process.env.CRON_SECRET.length>=32,503,'Scheduled maintenance is not configured.');
+      check(equal(request.headers.get('authorization')??'',`Bearer ${process.env.CRON_SECRET}`),401,'Maintenance credential rejected.');
+      return ok({cleaned:await cleanup()});
+    }
     if(key==='auth/login'&&method==='POST') {
       check(localAuthAllowed(),403,'Local login is disabled. Use Supabase authentication.');
       await rateLimit('local-login',10,300);
@@ -59,10 +67,20 @@ async function route(request:Request, context:{params:Promise<{path:string[]}>})
       if(key==='runner/events'&&method==='POST') {
         const b=z.object({project_id:uuid,events:eventsSchema}).parse(await body(request));return ok(await ingest(runner,b.project_id,b.events));
       }
+      if(key==='runner/collector-status'&&method==='POST') {
+        const b=z.object({project_id:uuid,source:z.string().regex(/^[a-f0-9]{24}$/),environment:z.enum(['local','staging','production']),events:z.number().int().min(0).max(500),unparsed:z.number().int().min(0).max(250),unparsed_total:z.number().int().min(0).max(1000000000).default(0),status:z.enum(['healthy','partial','error'])}).strict().parse(await body(request,2000));
+        check(runner.project_ids.includes(b.project_id),403,'Runner is not assigned to this project.');await projectFor(runner.organization_id,b.project_id);
+        await db.query(`INSERT INTO collector_sources(project_id,source,environment,runner_id,events,unparsed,status,unparsed_total) VALUES($1,$2,$3,$4,$5,$6,$7,$8)
+          ON CONFLICT(project_id,source,environment) DO UPDATE SET runner_id=excluded.runner_id,last_seen=now(),events=excluded.events,unparsed=excluded.unparsed,status=excluded.status,unparsed_total=excluded.unparsed_total`,[b.project_id,b.source,b.environment,runner.id,b.events,b.unparsed,b.status,b.unparsed_total]);
+        return ok({received:true});
+      }
       throw new HttpError(404,'Runner endpoint not found.');
     }
     const s=await session(request);
     await rateLimit(`user:${s.user}`,300);
+    if(key==='openapi'&&method==='GET')return ok(openApi());
+    const invitation=await invitationsApi(request,path,s);if(invitation)return invitation;
+    const operation=await operationsApi(request,path,s);if(operation)return operation;
     const extended=await workbenchApi(request,path,s);if(extended)return extended;
     if(key==='standards'&&method==='GET') {
       const project=new URL(request.url).searchParams.get('project');if(project)await projectFor(s.org,uuid.parse(project));
@@ -70,7 +88,8 @@ async function route(request:Request, context:{params:Promise<{path:string[]}>})
       const executions=await db.query(`SELECT e.* FROM executions e JOIN scans s ON s.id=e.scan_id
         WHERE s.id IN (SELECT DISTINCT ON (project_id) id FROM scans WHERE organization_id=$1
           AND ($2::uuid IS NULL OR project_id=$2) ORDER BY project_id,created_at DESC)`,[s.org,project]);
-      return ok(standardsCoverage(findings,executions));
+      const reviews=await db.query(`SELECT c.* FROM control_reviews c JOIN projects p ON p.id=c.project_id WHERE p.organization_id=$1 AND ($2::uuid IS NULL OR c.project_id=$2)`,[s.org,project]);
+      return ok(standardsCoverage(findings,executions,reviews));
     }
     if(key==='overview'&&method==='GET') {
       const projects=await db.query(`SELECT p.*,(SELECT max(occurred_at) FROM runtime_events e WHERE e.project_id=p.id) AS last_telemetry FROM projects p WHERE p.organization_id=$1 ORDER BY p.created_at DESC`,[s.org]);
@@ -100,14 +119,14 @@ async function route(request:Request, context:{params:Promise<{path:string[]}>})
           const target=b.target===undefined?p.target:b.target;
           await t.query('UPDATE projects SET name=$1,target=$2,metadata_only=$3,ai_enabled=$4 WHERE id=$5 AND organization_id=$6', [b.name??p.name,target?JSON.stringify(target):null,b.metadata_only??p.metadata_only,b.ai_enabled??p.ai_enabled,id,s.org]);
           if(b.metadata_only) {
-            await t.query("UPDATE findings SET data=data-'evidence'-'patch' WHERE project_id=$1 AND organization_id=$2",[id,s.org]);
-            await t.query("UPDATE scan_findings SET data=data-'evidence'-'patch' WHERE scan_id IN (SELECT id FROM scans WHERE project_id=$1 AND organization_id=$2)",[id,s.org]);
+            await t.query("UPDATE findings SET data=data-'evidence'-'patch'-'source_context' WHERE project_id=$1 AND organization_id=$2",[id,s.org]);
+            await t.query("UPDATE scan_findings SET data=data-'evidence'-'patch'-'source_context' WHERE scan_id IN (SELECT id FROM scans WHERE project_id=$1 AND organization_id=$2)",[id,s.org]);
           }
         });
         await audit(s,'project.updated',id);return ok({updated:true});
       }
       if(path.length===2&&method==='DELETE') {canOwn(s);await db.query('DELETE FROM projects WHERE id=$1 AND organization_id=$2',[id,s.org]);await audit(s,'project.deleted',id);return ok({deleted:true});}
-      if(path[2]==='scans'&&method==='POST') {canWrite(s);const b=z.object({revision:z.string().optional()}).parse(await body(request,1000));return ok(await enqueue(s,id,b.revision),201);}
+      if(path[2]==='scans'&&method==='POST') {canWrite(s);const b=z.object({revision:z.string().optional(),branch:z.string().optional()}).strict().parse(await body(request,1000));return ok(await enqueue(s,id,b.revision,b.branch,request.headers.get('idempotency-key')??undefined),201);}
       if(path[2]==='policy'&&method==='PUT') {
         canWrite(s);const b=z.object({yaml:z.string()}).parse(await body(request,40000));const policy=parsePolicy(b.yaml);
         await db.query('UPDATE projects SET policy=$1 WHERE id=$2 AND organization_id=$3',[JSON.stringify(policy),id,s.org]);await audit(s,'policy.updated',id);return ok(policy);
